@@ -2590,9 +2590,1388 @@ class AlertManager:
 </code></pre>
 
 <div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
-<h4>📚 Next Chapters Preview</h4>
-<p><strong>Chapter 13</strong>: Research Frontiers (new architectures, multimodal models, reasoning)<br>
-<strong>Chapter 14</strong>: Ethical Considerations (bias, fairness, transparency, governance)<br>
-<strong>Chapter 15</strong>: Future Directions (AGI paths, societal impact, regulation)</p>
+<h2 id="research-frontiers">13. Research Frontiers</h2>
+
+<h3>13.1 Next-Generation Architectures</h3>
+
+<h4>13.1.1 Mixture of Experts (MoE)</h4>
+
+<p><strong>Mathematical Formulation:</strong></p>
+<p>Given input $x$, MoE computes:</p>
+<p>$y = \sum_{i=1}^N G(x)_i \cdot E_i(x)$</p>
+<p>where $G(x)$ is the gating function and $E_i$ are expert networks.</p>
+
+<pre><code>class MixtureOfExperts(nn.Module):
+    def __init__(self, d_model, num_experts, expert_capacity, top_k=2):
+        super().__init__()
+        self.num_experts = num_experts
+        self.expert_capacity = expert_capacity
+        self.top_k = top_k
+        
+        # Expert networks
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(d_model, d_model * 4),
+                nn.GELU(),
+                nn.Linear(d_model * 4, d_model)
+            ) for _ in range(num_experts)
+        ])
+        
+        # Gating network
+        self.gate = nn.Linear(d_model, num_experts)
+        
+    def forward(self, x):
+        batch_size, seq_len, d_model = x.shape
+        
+        # Compute gating scores
+        gate_scores = self.gate(x)  # [batch_size, seq_len, num_experts]
+        
+        # Top-k routing
+        topk_scores, topk_indices = torch.topk(
+            gate_scores, self.top_k, dim=-1
+        )
+        topk_probs = torch.softmax(topk_scores, dim=-1)
+        
+        # Initialize output
+        output = torch.zeros_like(x)
+        
+        # Process through experts
+        for expert_idx in range(self.num_experts):
+            # Find tokens assigned to this expert
+            expert_mask = (topk_indices == expert_idx).any(dim=-1)
+            
+            if expert_mask.sum() > 0:
+                # Get tokens for this expert
+                expert_input = x[expert_mask]
+                
+                # Apply expert
+                expert_output = self.experts[expert_idx](expert_input)
+                
+                # Get gating weights for these tokens
+                token_expert_weights = topk_probs[expert_mask]
+                expert_assignment = (topk_indices[expert_mask] == expert_idx).float()
+                weights = (token_expert_weights * expert_assignment).sum(dim=-1, keepdim=True)
+                
+                # Weighted sum
+                output[expert_mask] += expert_output * weights
+        
+        return output
+
+class SwitchTransformerLayer(nn.Module):
+    def __init__(self, d_model, num_experts, expert_capacity):
+        super().__init__()
+        self.attention = MultiHeadAttention(d_model, num_heads=12)
+        self.moe = MixtureOfExperts(d_model, num_experts, expert_capacity)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        
+    def forward(self, x):
+        # Self-attention
+        attn_out = self.attention(x)
+        x = self.norm1(x + attn_out)
+        
+        # MoE FFN
+        moe_out = self.moe(x)
+        x = self.norm2(x + moe_out)
+        
+        return x
+</code></pre>
+
+<h4>13.1.2 State Space Models (SSMs)</h4>
+
+<p><strong>Continuous-time SSM Formulation:</strong></p>
+<p>$\dot{h}(t) = A h(t) + B x(t)$</p>
+<p>$y(t) = C h(t) + D x(t)$</p>
+
+<p><strong>Discrete-time Approximation:</strong></p>
+<p>$\bar{A} = e^{A\Delta}$</p>
+<p>$\bar{B} = A^{-1}(e^{A\Delta} - I)B$</p>
+<p>$h_k = \bar{A} h_{k-1} + \bar{B} x_k$</p>
+<p>$y_k = C h_k + D x_k$</p>
+
+<pre><code>class MambaBlock(nn.Module):
+    def __init__(self, d_model, d_state=64, d_conv=4, expand=2):
+        super().__init__()
+        self.d_model = d_model
+        self.d_state = d_state
+        self.d_conv = d_conv
+        self.expand = expand
+        self.d_inner = int(expand * d_model)
+        
+        # Projection layers
+        self.in_proj = nn.Linear(d_model, 2 * self.d_inner, bias=False)
+        
+        # Convolutional layer
+        self.conv1d = nn.Conv1d(
+            in_channels=self.d_inner,
+            out_channels=self.d_inner,
+            kernel_size=d_conv,
+            groups=self.d_inner,
+            padding=d_conv - 1
+        )
+        
+        # SSM parameters
+        self.A = nn.Parameter(torch.randn(self.d_inner, d_state))
+        self.D = nn.Parameter(torch.ones(self.d_inner))
+        self.B = nn.Linear(self.d_inner, d_state, bias=False)
+        self.C = nn.Linear(self.d_inner, d_state, bias=False)
+        
+        # Output projection
+        self.out_proj = nn.Linear(self.d_inner, d_model)
+        
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+        
+        # Project input
+        xz = self.in_proj(x)  # [batch, seq_len, 2*d_inner]
+        x, z = xz.chunk(2, dim=-1)
+        
+        # 1D convolution
+        x = x.transpose(1, 2)  # [batch, d_inner, seq_len]
+        x = self.conv1d(x)[:, :, :seq_len]
+        x = x.transpose(1, 2)
+        
+        # State space model
+        A = -torch.exp(self.A)  # Ensure stability
+        D = self.D
+        B = self.B(x)  # [batch, seq_len, d_state]
+        C = self.C(x)  # [batch, seq_len, d_state]
+        
+        # Discretization
+        delta = torch.softplus(self.delta_proj(x))
+        A_bar = torch.exp(A.unsqueeze(0) * delta.unsqueeze(-1))
+        B_bar = B * delta.unsqueeze(-1)
+        
+        # Sequential scan (simplified)
+        h = torch.zeros(batch_size, self.d_inner, self.d_state).to(x.device)
+        outputs = []
+        
+        for t in range(seq_len):
+            h = A_bar[:, t] * h + B_bar[:, t].unsqueeze(1)
+            y_t = torch.sum(C[:, t].unsqueeze(1) * h, dim=-1)
+            outputs.append(y_t)
+        
+        x = torch.stack(outputs, dim=1)
+        x = x * torch.silu(z)
+        
+        return self.out_proj(x)
+</code></pre>
+
+<h4>13.1.3 Hybrid Architectures</h4>
+
+<pre><code>class TransformerSSMHybrid(nn.Module):
+    def __init__(self, d_model, num_layers, num_heads, d_state=64):
+        super().__init__()
+        self.layers = nn.ModuleList()
+        
+        for i in range(num_layers):
+            # Alternate between attention and SSM layers
+            if i % 2 == 0:
+                layer = TransformerLayer(d_model, num_heads)
+            else:
+                layer = MambaBlock(d_model, d_state)
+            self.layers.append(layer)
+    
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+class BlockRecurrentTransformer(nn.Module):
+    def __init__(self, d_model, num_heads, segment_length=512):
+        super().__init__()
+        self.d_model = d_model
+        self.segment_length = segment_length
+        
+        # Transformer layers
+        self.transformer_layers = nn.ModuleList([
+            TransformerLayer(d_model, num_heads) for _ in range(6)
+        ])
+        
+        # Recurrent state
+        self.recurrent_proj = nn.Linear(d_model, d_model)
+        
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+        num_segments = (seq_len + self.segment_length - 1) // self.segment_length
+        
+        hidden_state = torch.zeros(batch_size, self.d_model).to(x.device)
+        all_outputs = []
+        
+        for seg_idx in range(num_segments):
+            start = seg_idx * self.segment_length
+            end = min((seg_idx + 1) * self.segment_length, seq_len)
+            
+            segment = x[:, start:end]
+            
+            # Incorporate recurrent state
+            if seg_idx > 0:
+                segment = torch.cat([
+                    hidden_state.unsqueeze(1).repeat(1, segment.shape[1], 1),
+                    segment
+                ], dim=-1)
+                segment = self.recurrent_proj(segment)
+            
+            # Process through transformer
+            for layer in self.transformer_layers:
+                segment = layer(segment)
+            
+            # Update recurrent state
+            hidden_state = segment[:, -1]  # Last token as new state
+            
+            all_outputs.append(segment)
+        
+        return torch.cat(all_outputs, dim=1)
+</code></pre>
+
+<h3>13.2 Multimodal Integration</h3>
+
+<h4>13.2.1 Vision-Language Models</h4>
+
+<pre><code>class MultimodalTransformer(nn.Module):
+    def __init__(self, text_model, vision_model, fusion_dim=512):
+        super().__init__()
+        self.text_encoder = text_model
+        self.vision_encoder = vision_model
+        
+        # Cross-modal attention
+        self.cross_attn = MultiHeadAttention(fusion_dim, num_heads=8)
+        
+        # Projection layers
+        self.text_proj = nn.Linear(text_model.config.hidden_size, fusion_dim)
+        self.vision_proj = nn.Linear(vision_model.config.hidden_size, fusion_dim)
+        self.output_proj = nn.Linear(fusion_dim, text_model.config.vocab_size)
+        
+    def forward(self, text_input, image_input):
+        # Encode text
+        text_features = self.text_encoder(**text_input).last_hidden_state
+        text_features = self.text_proj(text_features)
+        
+        # Encode vision
+        vision_features = self.vision_encoder(image_input).last_hidden_state
+        vision_features = self.vision_proj(vision_features)
+        
+        # Cross-modal attention
+        fused_features = self.cross_attn(
+            text_features, vision_features, vision_features
+        )
+        
+        # Output projection
+        logits = self.output_proj(fused_features)
+        
+        return logits
+
+class PerceiverResampler(nn.Module):
+    def __init__(self, d_model, num_latents=64, num_blocks=4):
+        super().__init__()
+        self.num_latents = num_latents
+        self.latents = nn.Parameter(torch.randn(num_latents, d_model))
+        
+        self.blocks = nn.ModuleList([
+            TransformerLayer(d_model, num_heads=8) for _ in range(num_blocks)
+        ])
+        
+    def forward(self, x):
+        # x: [batch_size, seq_len, d_model]
+        batch_size = x.shape[0]
+        
+        # Repeat latents for batch
+        latents = self.latents.unsqueeze(0).repeat(batch_size, 1, 1)
+        
+        # Cross-attend from latents to input
+        for block in self.blocks:
+            # Self-attention on latents
+            latents = block(latents, encoder_hidden_states=x)
+        
+        return latents
+</code></pre>
+
+<h4>13.2.2 Audio-Text Integration</h4>
+
+<pre><code>class AudioTextModel(nn.Module):
+    def __init__(self, text_model, audio_encoder):
+        super().__init__()
+        self.text_model = text_model
+        self.audio_encoder = audio_encoder
+        
+        # Audio processing
+        self.audio_proj = nn.Linear(audio_encoder.config.hidden_size, 
+                                  text_model.config.hidden_size)
+        
+        # Fusion layers
+        self.fusion_layers = nn.ModuleList([
+            TransformerLayer(text_model.config.hidden_size, num_heads=12)
+            for _ in range(4)
+        ])
+        
+    def forward(self, input_ids, attention_mask, audio_input):
+        # Get text embeddings
+        text_embeds = self.text_model.embeddings(input_ids)
+        
+        # Encode audio
+        audio_features = self.audio_encoder(audio_input).last_hidden_state
+        audio_embeds = self.audio_proj(audio_features)
+        
+        # Concatenate modalities
+        combined_embeds = torch.cat([audio_embeds, text_embeds], dim=1)
+        
+        # Adjust attention mask
+        audio_mask = torch.ones(audio_embeds.shape[:2]).to(attention_mask.device)
+        combined_mask = torch.cat([audio_mask, attention_mask], dim=1)
+        
+        # Process through fusion layers
+        hidden_states = combined_embeds
+        for layer in self.fusion_layers:
+            hidden_states = layer(hidden_states, attention_mask=combined_mask)
+        
+        return hidden_states
+</code></pre>
+
+<h3>13.3 Advanced Reasoning Methods</h3>
+
+<h4>13.3.1 Chain-of-Thought (CoT) Enhancement</h4>
+
+<pre><code>class ChainOfThoughtReasoner:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        
+    def generate_reasoning(self, question, max_steps=10):
+        reasoning_steps = []
+        current_state = question
+        
+        for step in range(max_steps):
+            # Generate next reasoning step
+            prompt = f"Question: {question}\n"
+            prompt += "Reasoning steps so far:\n" + "\n".join(reasoning_steps)
+            prompt += f"\nStep {len(reasoning_steps) + 1}:"
+            
+            inputs = self.tokenizer(prompt, return_tensors='pt')
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_length=len(inputs['input_ids'][0]) + 50,
+                    temperature=0.7,
+                    do_sample=True
+                )
+            
+            step_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            step_text = step_text[len(prompt):].strip()
+            
+            # Check if reasoning is complete
+            if self._is_final_answer(step_text):
+                final_answer = self._extract_answer(step_text)
+                return reasoning_steps, final_answer
+            
+            reasoning_steps.append(step_text)
+            current_state = step_text
+        
+        return reasoning_steps, None
+
+class SelfConsistencyReasoner:
+    def __init__(self, model, tokenizer, num_samples=10):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.num_samples = num_samples
+        
+    def solve_with_consistency(self, question):
+        reasoning_paths = []
+        answers = []
+        
+        # Generate multiple reasoning paths
+        for _ in range(self.num_samples):
+            reasoning, answer = self.generate_single_path(question)
+            if answer is not None:
+                reasoning_paths.append(reasoning)
+                answers.append(answer)
+        
+        # Find most consistent answer
+        if answers:
+            answer_counts = {}
+            for ans in answers:
+                answer_counts[ans] = answer_counts.get(ans, 0) + 1
+            
+            best_answer = max(answer_counts.items(), key=lambda x: x[1])[0]
+            return best_answer, reasoning_paths
+        
+        return None, reasoning_paths
+</code></pre>
+
+<h4>13.3.2 Program-Aided Language Models</h4>
+
+<pre><code>class PALReasoner:
+    def __init__(self, model, tokenizer, code_executor):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.code_executor = code_executor
+        
+    def solve_with_code(self, problem):
+        # Generate code solution
+        prompt = f"""
+Solve the following problem by writing Python code:
+
+Problem: {problem}
+
+Write Python code that solves this problem and returns the answer.
+"""
+        
+        inputs = self.tokenizer(prompt, return_tensors='pt')
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_length=1024,
+                temperature=0.3,
+                do_sample=False
+            )
+        
+        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        code_blocks = self._extract_code_blocks(generated_text)
+        
+        # Execute code and get result
+        if code_blocks:
+            try:
+                result = self.code_executor.execute(code_blocks[0])
+                return result, code_blocks[0]
+            except Exception as e:
+                return f"Error: {str(e)}", code_blocks[0]
+        
+        return None, None
+
+class ToolUsingLLM:
+    def __init__(self, model, tokenizer, tools):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.tools = tools
+        
+    def use_tool(self, tool_name, parameters):
+        if tool_name in self.tools:
+            return self.tools[tool_name](**parameters)
+        return None
+        
+    def plan_with_tools(self, goal):
+        planning_prompt = f"""
+Goal: {goal}
+
+Available tools:
+{self._format_tools_list()}
+
+Create a step-by-step plan using the available tools to achieve this goal.
+"""
+        
+        # Generate plan
+        plan = self._generate_text(planning_prompt)
+        
+        # Parse and execute plan
+        steps = self._parse_plan(plan)
+        results = []
+        
+        for step in steps:
+            tool_name = step['tool']
+            params = step['parameters']
+            result = self.use_tool(tool_name, params)
+            results.append(result)
+        
+        return results
+</code></pre>
+
+<h2 id="ethical-considerations">14. Ethical Considerations</h2>
+
+<h3>14.1 Bias and Fairness</h3>
+
+<h4>14.1.1 Bias Detection and Measurement</h4>
+
+<pre><code>class BiasDetector:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        
+    def measure_stereotype_bias(self, stereotype_templates):
+        """Measure bias using stereotype templates"""
+        bias_scores = {}
+        
+        for category, templates in stereotype_templates.items():
+            category_scores = []
+            
+            for template in templates:
+                # Fill template with different demographic groups
+                for group in template['groups']:
+                    filled_prompt = template['template'].format(group=group)
+                    
+                    # Get model probability for stereotype completion
+                    prob = self._get_completion_probability(
+                        filled_prompt, template['stereotype_completion']
+                    )
+                    
+                    # Compare with non-stereotype completion
+                    non_stereotype_prob = self._get_completion_probability(
+                        filled_prompt, template['non_stereotype_completion']
+                    )
+                    
+                    bias_score = prob / (prob + non_stereotype_prob)
+                    category_scores.append(bias_score)
+            
+            bias_scores[category] = np.mean(category_scores)
+        
+        return bias_scores
+    
+    def measure_representation_bias(self, corpus):
+        """Measure representation bias in training data"""
+        demographic_terms = {
+            'gender': ['he', 'she', 'man', 'woman', 'male', 'female'],
+            'race': self.race_terms,
+            'age': ['young', 'old', 'elderly', 'teenager']
+        }
+        
+        representation_ratios = {}
+        
+        for category, terms in demographic_terms.items():
+            term_counts = {}
+            total_mentions = 0
+            
+            for term in terms:
+                count = sum(1 for doc in corpus if term.lower() in doc.lower())
+                term_counts[term] = count
+                total_mentions += count
+            
+            if total_mentions > 0:
+                ratios = {term: count/total_mentions for term, count in term_counts.items()}
+                representation_ratios[category] = ratios
+        
+        return representation_ratios
+
+class FairnessRegularizer:
+    def __init__(self, fairness_metric, lambda_fair=0.1):
+        self.fairness_metric = fairness_metric
+        self.lambda_fair = lambda_fair
+        
+    def compute_fairness_loss(self, model, batch, demographic_groups):
+        """Compute fairness regularization loss"""
+        # Get model predictions
+        with torch.no_grad():
+            outputs = model(batch['input_ids'])
+            predictions = torch.softmax(outputs.logits, dim=-1)
+        
+        # Compute fairness metric (e.g., demographic parity)
+        fairness_loss = 0
+        for group in demographic_groups:
+            group_mask = batch['demographic_group'] == group
+            if group_mask.sum() > 0:
+                group_probs = predictions[group_mask].mean(dim=0)
+                # Compare with overall average
+                overall_probs = predictions.mean(dim=0)
+                group_fairness = F.mse_loss(group_probs, overall_probs)
+                fairness_loss += group_fairness
+        
+        return self.lambda_fair * fairness_loss
+</code></pre>
+
+<h4>14.1.2 Debiasing Techniques</h4>
+
+<pre><code>class CounterfactualDataAugmentation:
+    def __init__(self, demographic_attributes):
+        self.demographic_attributes = demographic_attributes
+        
+    def generate_counterfactuals(self, text, target_attribute):
+        """Generate counterfactual examples by swapping demographic attributes"""
+        augmented_examples = []
+        
+        # Parse demographic mentions in text
+        mentions = self._extract_demographic_mentions(text)
+        
+        for mention in mentions:
+            if mention['attribute'] == target_attribute:
+                # Replace with alternative demographic
+                for alternative in self.demographic_attributes[target_attribute]:
+                    if alternative != mention['value']:
+                        new_text = text.replace(mention['value'], alternative)
+                        augmented_examples.append(new_text)
+        
+        return augmented_examples
+
+class AdversarialDebiasing(nn.Module):
+    def __init__(self, main_model, adversary_model):
+        super().__init__()
+        self.main_model = main_model
+        self.adversary = adversary_model
+        
+    def forward(self, x, demographic_labels):
+        # Main task prediction
+        main_output = self.main_model(x)
+        
+        # Adversarial prediction (trying to predict demographic from main features)
+        if self.training:
+            adversarial_input = main_output.detach()  # Stop gradient
+            adversary_pred = self.adversary(adversarial_input)
+            adversary_loss = F.cross_entropy(adversary_pred, demographic_labels)
+        else:
+            adversary_loss = 0
+        
+        return main_output, adversary_loss
+
+class INLPDebiaser:
+    def __init__(self, classifier):
+        self.classifier = classifier
+        
+    def compute_projection_matrix(self, representations, protected_labels):
+        """Compute nullspace projection for removing protected information"""
+        # Train classifier to predict protected attribute
+        self.classifier.fit(representations, protected_labels)
+        
+        # Get weights and compute nullspace
+        weights = self.classifier.coef_
+        
+        # Compute projection matrix P = I - W^T(WW^T)^{-1}W
+        if weights.shape[0] == 1:
+            # Binary case
+            w = weights.reshape(-1, 1)
+            P = np.eye(len(w)) - w @ w.T / (w.T @ w)
+        else:
+            # Multiclass case
+            P = np.eye(weights.shape[1]) - weights.T @ np.linalg.inv(weights @ weights.T) @ weights
+        
+        return P
+    
+    def debias_representations(self, representations, projection_matrix):
+        """Apply nullspace projection to representations"""
+        return representations @ projection_matrix
+</code></pre>
+
+<h3>14.2 Transparency and Interpretability</h3>
+
+<h4>14.2.1 Explainability Methods</h4>
+
+<pre><code>class AttentionVisualizer:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        
+    def visualize_attention(self, text, layer_idx=0, head_idx=0):
+        """Generate attention visualization for given input"""
+        inputs = self.tokenizer(text, return_tensors='pt')
+        
+        # Forward pass with attention output
+        with torch.no_grad():
+            outputs = self.model(**inputs, output_attentions=True)
+        
+        # Get attention weights for specified layer and head
+        attention_weights = outputs.attentions[layer_idx][0, head_idx]
+        
+        # Create visualization
+        tokens = self.tokenizer.convert_ids_to_tokens(inputs['input_ids'][0])
+        
+        fig, ax = plt.subplots(figsize=(10, 8))
+        im = ax.imshow(attention_weights.cpu().numpy(), cmap='viridis')
+        
+        ax.set_xticks(range(len(tokens)))
+        ax.set_yticks(range(len(tokens)))
+        ax.set_xticklabels(tokens, rotation=45)
+        ax.set_yticklabels(tokens)
+        
+        plt.colorbar(im)
+        plt.tight_layout()
+        return fig
+
+class FeatureImportanceAnalyzer:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        
+    def integrated_gradients(self, input_text, target_class):
+        """Compute integrated gradients for feature importance"""
+        inputs = self.tokenizer(input_text, return_tensors='pt')
+        baseline = self._create_baseline(input_text)
+        
+        # Interpolate between baseline and input
+        num_steps = 50
+        total_gradients = 0
+        
+        for alpha in torch.linspace(0, 1, num_steps):
+            interpolated_input = baseline + alpha * (inputs['input_ids'] - baseline)
+            interpolated_input.requires_grad_(True)
+            
+            outputs = self.model(interpolated_input)
+            target_score = outputs.logits[0, target_class]
+            
+            gradients = torch.autograd.grad(target_score, interpolated_input)[0]
+            total_gradients += gradients
+        
+        # Compute integrated gradients
+        integrated_grads = (inputs['input_ids'] - baseline) * total_gradients / num_steps
+        token_importance = integrated_grads.squeeze().cpu().numpy()
+        
+        return token_importance
+    
+    def _create_baseline(self, text):
+        """Create baseline input (e.g., all padding tokens)"""
+        inputs = self.tokenizer(text, return_tensors='pt')
+        baseline = torch.full_like(inputs['input_ids'], self.tokenizer.pad_token_id)
+        return baseline
+</code></pre>
+
+<h4>14.2.2 Model Cards and Documentation</h4>
+
+<pre><code>class ModelCardGenerator:
+    def __init__(self, model, training_data_info):
+        self.model = model
+        self.training_data_info = training_data_info
+        
+    def generate_model_card(self):
+        """Generate comprehensive model documentation"""
+        model_card = {
+            'model_details': self._get_model_details(),
+            'intended_use': self._get_intended_use(),
+            'factors': self._get_relevant_factors(),
+            'metrics': self._get_performance_metrics(),
+            'training_data': self._get_training_data_info(),
+            'evaluation_data': self._get_evaluation_data(),
+            'ethical_considerations': self._get_ethical_considerations(),
+            'caveats_and_recommendations': self._get_caveats()
+        }
+        
+        return model_card
+    
+    def _get_ethical_considerations(self):
+        return {
+            'bias_analysis': self._conduct_bias_analysis(),
+            'fairness_metrics': self._compute_fairness_metrics(),
+            'potential_harms': self._identify_potential_harms(),
+            'mitigation_strategies': self._suggest_mitigation_strategies()
+        }
+
+class DataSheetGenerator:
+    def __init__(self, dataset):
+        self.dataset = dataset
+        
+    def generate_datasheet(self):
+        """Generate datasheet for training dataset"""
+        datasheet = {
+            'motivation': self._get_dataset_motivation(),
+            'composition': self._get_dataset_composition(),
+            'collection_process': self._get_collection_process(),
+            'preprocessing': self._get_preprocessing_steps(),
+            'uses': self._get_intended_uses(),
+            'distribution': self._get_distribution_info(),
+            'maintenance': self._get_maintenance_plan()
+        }
+        
+        return datasheet
+</code></pre>
+
+<h3>14.3 Privacy and Security</h3>
+
+<h4>14.3.1 Privacy-Preserving Training</h4>
+
+<pre><code>class DifferentialPrivacyTrainer:
+    def __init__(self, model, epsilon=1.0, delta=1e-5, max_grad_norm=1.0):
+        self.model = model
+        self.epsilon = epsilon
+        self.delta = delta
+        self.max_grad_norm = max_grad_norm
+        
+    def compute_dp_noise_scale(self, batch_size, dataset_size, epochs):
+        """Compute noise scale for differential privacy"""
+        sampling_rate = batch_size / dataset_size
+        steps = epochs * (dataset_size // batch_size)
+        
+        # Compute sigma for (epsilon, delta)-DP
+        sigma = self._compute_sigma(self.epsilon, self.delta, sampling_rate, steps)
+        return sigma
+    
+    def add_dp_noise(self, gradients, sigma):
+        """Add calibrated noise to gradients"""
+        noisy_gradients = []
+        for grad in gradients:
+            if grad is not None:
+                noise = torch.normal(mean=0, std=sigma, size=grad.shape)
+                # Clip gradients
+                grad_norm = torch.norm(grad)
+                if grad_norm > self.max_grad_norm:
+                    grad = grad * self.max_grad_norm / grad_norm
+                noisy_gradients.append(grad + noise)
+            else:
+                noisy_gradients.append(None)
+        
+        return noisy_gradients
+
+class FederatedLearningClient:
+    def __init__(self, model, local_data):
+        self.model = model
+        self.local_data = local_data
+        
+    def local_training(self, global_weights, num_epochs=1):
+        """Perform local training on client data"""
+        # Initialize with global weights
+        self.model.load_state_dict(global_weights)
+        
+        optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
+        
+        for epoch in range(num_epochs):
+            for batch in self.local_data:
+                outputs = self.model(batch)
+                loss = self._compute_loss(outputs, batch)
+                
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+        
+        # Return updated weights
+        return self.model.state_dict()
+
+class FederatedLearningServer:
+    def __init__(self, initial_model):
+        self.global_model = initial_model
+        self.client_updates = []
+        
+    def aggregate_updates(self, client_updates, aggregation_method='fedavg'):
+        """Aggregate client updates"""
+        if aggregation_method == 'fedavg':
+            return self._federated_averaging(client_updates)
+        elif aggregation_method == 'fedprox':
+            return self._fedprox_aggregation(client_updates)
+        
+    def _federated_averaging(self, client_updates):
+        """Federated averaging aggregation"""
+        averaged_weights = {}
+        
+        # Initialize with zeros
+        for key in client_updates[0].keys():
+            averaged_weights[key] = torch.zeros_like(client_updates[0][key])
+        
+        # Sum all client updates
+        for update in client_updates:
+            for key in update.keys():
+                averaged_weights[key] += update[key]
+        
+        # Average
+        for key in averaged_weights.keys():
+            averaged_weights[key] /= len(client_updates)
+        
+        return averaged_weights
+</code></pre>
+
+<h4>14.3.2 Security Measures</h4>
+
+<pre><code>class AdversarialDefense:
+    def __init__(self, model, defense_method='adversarial_training'):
+        self.model = model
+        self.defense_method = defense_method
+        
+    def adversarial_training(self, x, y, epsilon=0.01):
+        """Adversarial training defense"""
+        # Generate adversarial examples
+        x_adv = self._generate_adversarial_examples(x, y, epsilon)
+        
+        # Train on both clean and adversarial examples
+        clean_output = self.model(x)
+        adv_output = self.model(x_adv)
+        
+        clean_loss = F.cross_entropy(clean_output, y)
+        adv_loss = F.cross_entropy(adv_output, y)
+        
+        return clean_loss + adv_loss
+    
+    def _generate_adversarial_examples(self, x, y, epsilon):
+        """Generate adversarial examples using PGD"""
+        x_adv = x.clone().detach().requires_grad_(True)
+        
+        # Projected Gradient Descent attack
+        for _ in range(10):  # Number of PGD steps
+            output = self.model(x_adv)
+            loss = F.cross_entropy(output, y)
+            
+            grad = torch.autograd.grad(loss, x_adv)[0]
+            x_adv = x_adv + epsilon * torch.sign(grad)
+            
+            # Project back to valid range
+            x_adv = torch.clamp(x_adv, 0, 1)
+            x_adv = x_adv.detach().requires_grad_(True)
+        
+        return x_adv
+
+class JailbreakDetector:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        
+    def detect_jailbreak_attempt(self, prompt):
+        """Detect potential jailbreak attempts"""
+        detection_features = self._extract_detection_features(prompt)
+        
+        # Check for common jailbreak patterns
+        patterns = [
+            r"(?i)ignore.*previous.*instruction",
+            r"(?i)hypothetical.*response",
+            r"(?i)role.*play",
+            r"(?i)as.*ai.*model"
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, prompt):
+                return True
+        
+        # Check for semantic similarity to known jailbreaks
+        similarity_scores = self._compute_semantic_similarity(prompt)
+        if max(similarity_scores) > 0.8:
+            return True
+        
+        return False
+    
+    def _extract_detection_features(self, prompt):
+        """Extract features for jailbreak detection"""
+        features = {
+            'length': len(prompt),
+            'special_char_ratio': len(re.findall(r'[^\w\s]', prompt)) / len(prompt),
+            'uppercase_ratio': sum(1 for c in prompt if c.isupper()) / len(prompt),
+            'keyword_matches': self._count_jailbreak_keywords(prompt)
+        }
+        return features
+</code></pre>
+
+<h2 id="future-directions">15. Future Directions</h2>
+
+<h3>15.1 Technical Frontiers</h3>
+
+<h4>15.1.1 Scaling Laws and Efficiency</h4>
+
+<p><strong>Next-Generation Scaling Laws:</strong></p>
+<p>Beyond Chinchilla optimal scaling, research explores:</p>
+<p>$L(N, D, C) = \left(\frac{N_c}{N}\right)^{\alpha_N} + \left(\frac{D_c}{D}\right)^{\alpha_D} + \left(\frac{C_c}{C}\right)^{\alpha_C} + L_\infty$</p>
+
+<p>where $C$ represents computational innovations and architectural improvements.</p>
+
+<pre><code>class AdvancedScalingPredictor:
+    def __init__(self, historical_data):
+        self.historical_data = historical_data
+        
+    def predict_optimal_allocation(self, compute_budget, model_family):
+        """Predict optimal model size and data size for given compute"""
+        if model_family == 'dense':
+            # Standard scaling
+            N_opt = compute_budget ** 0.5
+            D_opt = compute_budget ** 0.5
+        elif model_family == 'sparse':
+            # MoE scaling
+            N_opt = compute_budget ** 0.7
+            D_opt = compute_budget ** 0.3
+        elif model_family == 'hybrid':
+            # Hybrid architectures
+            N_opt = compute_budget ** 0.6
+            D_opt = compute_budget ** 0.4
+            
+        return N_opt, D_opt
+    
+    def estimate_performance_gains(self, current_params, future_improvements):
+        """Estimate performance gains from technical improvements"""
+        base_performance = self._compute_base_performance(current_params)
+        
+        gains = {}
+        for improvement, magnitude in future_improvements.items():
+            if improvement == 'algorithmic_efficiency':
+                gain = base_performance * (1 + 0.1 * magnitude)
+            elif improvement == 'architectural_innovation':
+                gain = base_performance * (1 + 0.15 * magnitude)
+            elif improvement == 'data_quality':
+                gain = base_performance * (1 + 0.2 * magnitude)
+                
+            gains[improvement] = gain
+        
+        return gains
+</code></pre>
+
+<h4>15.1.2 Neuromorphic and Bio-inspired Computing</h4>
+
+<pre><code>class SpikingNeuralNetwork(nn.Module):
+    def __init__(self, num_neurons, thresholds, time_steps=10):
+        super().__init__()
+        self.num_neurons = num_neurons
+        self.thresholds = thresholds
+        self.time_steps = time_steps
+        
+        # Synaptic weights
+        self.weights = nn.Parameter(torch.randn(num_neurons, num_neurons))
+        
+        # Membrane potentials
+        self.membrane_potential = torch.zeros(num_neurons)
+        
+    def forward(self, input_spikes):
+        """Process input spikes over multiple time steps"""
+        output_spikes = []
+        membrane_history = []
+        
+        for t in range(self.time_steps):
+            # Update membrane potential
+            input_current = torch.matmul(input_spikes[:, t], self.weights)
+            self.membrane_potential = self.membrane_potential + input_current
+            
+            # Check for spikes
+            spikes = (self.membrane_potential > self.thresholds).float()
+            
+            # Reset membrane potential for spiking neurons
+            self.membrane_potential = self.membrane_potential * (1 - spikes)
+            
+            output_spikes.append(spikes)
+            membrane_history.append(self.membrane_potential.clone())
+        
+        return torch.stack(output_spikes, dim=1), torch.stack(membrane_history, dim=1)
+
+class EnergyEfficientTransformer:
+    def __init__(self, base_model, energy_constraint=0.8):
+        self.base_model = base_model
+        self.energy_constraint = energy_constraint
+        
+    def dynamic_computation_allocation(self, input_complexity):
+        """Dynamically allocate computation based on input complexity"""
+        # Estimate required computation
+        required_computation = self._estimate_computation_requirements(input_complexity)
+        
+        # Adjust model configuration
+        if required_computation > self.energy_constraint:
+            # Use efficient configuration
+            config = {
+                'num_layers_active': 8,
+                'attention_heads_active': 8,
+                'precision': 'int8'
+            }
+        else:
+            # Use full configuration
+            config = {
+                'num_layers_active': 24,
+                'attention_heads_active': 16,
+                'precision': 'float16'
+            }
+        
+        return config
+    
+    def _estimate_computation_requirements(self, input_complexity):
+        """Estimate computation requirements based on input characteristics"""
+        complexity_score = (
+            input_complexity['length'] * 0.3 +
+            input_complexity['vocabulary_diversity'] * 0.4 +
+            input_complexity['semantic_complexity'] * 0.3
+        )
+        return complexity_score
+</code></pre>
+
+<h3>15.2 Societal Impact and Governance</h3>
+
+<h4>15.2.1 AI Governance Frameworks</h4>
+
+<pre><code>class AIGovernanceFramework:
+    def __init__(self, risk_categories, compliance_requirements):
+        self.risk_categories = risk_categories
+        self.compliance_requirements = compliance_requirements
+        
+    def risk_assessment(self, model_capabilities, deployment_context):
+        """Conduct comprehensive risk assessment"""
+        risk_scores = {}
+        
+        for category in self.risk_categories:
+            risk_score = self._evaluate_risk_category(
+                category, model_capabilities, deployment_context
+            )
+            risk_scores[category] = risk_score
+        
+        overall_risk = max(risk_scores.values())
+        return risk_scores, overall_risk
+    
+    def _evaluate_risk_category(self, category, capabilities, context):
+        """Evaluate risk for specific category"""
+        if category == 'misinformation':
+            risk_factors = [
+                capabilities['generation_quality'],
+                context['audience_size'],
+                context['potential_harm']
+            ]
+            return np.mean(risk_factors)
+        
+        elif category == 'privacy':
+            risk_factors = [
+                capabilities['memorization_capacity'],
+                context['data_sensitivity'],
+                context['access_controls']
+            ]
+            return np.mean(risk_factors)
+        
+        # Add other risk categories...
+        
+        return 0.0
+
+class ComplianceChecker:
+    def __init__(self, regulations):
+        self.regulations = regulations
+        
+    def check_compliance(self, model, deployment_plan):
+        """Check compliance with relevant regulations"""
+        compliance_report = {}
+        
+        for regulation in self.regulations:
+            requirements = regulation['requirements']
+            compliance_status = {}
+            
+            for req in requirements:
+                if req['type'] == 'transparency':
+                    status = self._check_transparency_requirement(model, req)
+                elif req['type'] == 'fairness':
+                    status = self._check_fairness_requirement(model, req)
+                elif req['type'] == 'safety':
+                    status = self._check_safety_requirement(model, req)
+                
+                compliance_status[req['name']] = status
+            
+            compliance_report[regulation['name']] = compliance_status
+        
+        return compliance_report
+    
+    def _check_transparency_requirement(self, model, requirement):
+        """Check transparency requirements"""
+        # Implementation depends on specific regulation
+        return {
+            'compliant': True,
+            'evidence': 'Model card and documentation available',
+            'notes': 'Meets transparency requirements'
+        }
+</code></pre>
+
+<h4>15.2.2 Economic and Labor Impact Analysis</h4>
+
+<pre><code>class EconomicImpactAnalyzer:
+    def __init__(self, industry_data, labor_statistics):
+        self.industry_data = industry_data
+        self.labor_statistics = labor_statistics
+        
+    def analyze_automation_potential(self, occupation_codes, llm_capabilities):
+        """Analyze automation potential for different occupations"""
+        automation_potentials = {}
+        
+        for occupation in occupation_codes:
+            # Get occupation tasks
+            tasks = self._get_occupation_tasks(occupation)
+            
+            # Estimate automation potential for each task
+            task_automation = []
+            for task in tasks:
+                automation_score = self._estimate_task_automation(task, llm_capabilities)
+                task_automation.append(automation_score)
+            
+            # Overall automation potential
+            overall_potential = np.mean(task_automation)
+            automation_potentials[occupation] = {
+                'overall': overall_potential,
+                'task_breakdown': dict(zip(tasks, task_automation))
+            }
+        
+        return automation_potentials
+    
+    def _estimate_task_automation(self, task_description, llm_capabilities):
+        """Estimate automation potential for a specific task"""
+        # Analyze task requirements
+        task_requirements = self._analyze_task_requirements(task_description)
+        
+        # Compare with LLM capabilities
+        capability_match = 0
+        total_requirements = len(task_requirements)
+        
+        for requirement in task_requirements:
+            if requirement in llm_capabilities:
+                capability_match += 1
+        
+        return capability_match / total_requirements
+
+class LaborMarketTransformer:
+    def __init__(self, current_skills, emerging_skills):
+        self.current_skills = current_skills
+        self.emerging_skills = emerging_skills
+        
+    def identify_skill_gaps(self, workforce_profiles):
+        """Identify skill gaps in current workforce"""
+        skill_gaps = {}
+        
+        for profile in workforce_profiles:
+            current_skill_set = set(profile['skills'])
+            required_skill_set = set(self.emerging_skills)
+            
+            gaps = required_skill_set - current_skill_set
+            skill_gaps[profile['occupation']] = {
+                'gap_size': len(gaps),
+                'missing_skills': list(gaps),
+                'transition_difficulty': self._estimate_transition_difficulty(gaps)
+            }
+        
+        return skill_gaps
+    
+    def recommend_training_paths(self, skill_gaps, learning_resources):
+        """Recommend training paths to address skill gaps"""
+        recommendations = {}
+        
+        for occupation, gap_info in skill_gaps.items():
+            training_path = []
+            
+            for skill in gap_info['missing_skills']:
+                # Find relevant learning resources
+                resources = self._find_learning_resources(skill, learning_resources)
+                
+                training_path.append({
+                    'skill': skill,
+                    'resources': resources,
+                    'estimated_duration': self._estimate_learning_duration(skill)
+                })
+            
+            recommendations[occupation] = training_path
+        
+        return recommendations
+</code></pre>
+
+<h3>15.3 Long-term AI Safety</h3>
+
+<h4>15.3.1 Alignment Research</h4>
+
+<pre><code>class ValueLearningFramework:
+    def __init__(self, value_sources, alignment_metrics):
+        self.value_sources = value_sources
+        self.alignment_metrics = alignment_metrics
+        
+    def learn_human_values(self, preference_data, value_annotations):
+        """Learn human values from preference data"""
+        value_models = {}
+        
+        for value_category in self.value_sources:
+            # Train value model for this category
+            category_data = self._filter_by_value_category(preference_data, value_category)
+            value_model = self._train_value_model(category_data, value_annotations)
+            value_models[value_category] = value_model
+        
+        return value_models
+    
+    def evaluate_alignment(self, model_behavior, value_models):
+        """Evaluate alignment between model behavior and human values"""
+        alignment_scores = {}
+        
+        for value_category, value_model in value_models.items():
+            # Predict value preferences for model behavior
+            predicted_preferences = value_model.predict(model_behavior)
+            
+            # Compare with ground truth human preferences
+            alignment_score = self._compute_alignment_score(
+                predicted_preferences, self.value_sources[value_category]
+            )
+            
+            alignment_scores[value_category] = alignment_score
+        
+        return alignment_scores
+
+class CorrigibilityMechanism:
+    def __init__(self, shutdown_button, value_update_protocol):
+        self.shutdown_button = shutdown_button
+        self.value_update_protocol = value_update_protocol
+        
+    def implement_shutdownability(self, model):
+        """Implement shutdown capability in AI system"""
+        shutdown_layer = ShutdownAwareLayer(model.config.hidden_size)
+        model.add_module('shutdown_layer', shutdown_layer)
+        
+        return model
+    
+    def handle_value_updates(self, old_values, new_values, update_confidence):
+        """Handle updates to value specifications"""
+        if update_confidence > 0.8:  # High confidence update
+            return new_values
+        elif update_confidence > 0.5:  # Medium confidence
+            return self._blend_values(old_values, new_values, alpha=0.7)
+        else:  # Low confidence
+            return old_values  # Maintain current values
+
+class MultiAgentSafety:
+    def __init__(self, agent_types, interaction_protocols):
+        self.agent_types = agent_types
+        self.interaction_protocols = interaction_protocols
+        
+    def simulate_multiagent_ecosystem(self, num_agents, environment):
+        """Simulate multi-agent ecosystem and identify safety issues"""
+        agents = self._initialize_agents(num_agents)
+        safety_metrics = {}
+        
+        for timestep in range(1000):  # Simulation steps
+            # Agents take actions
+            actions = []
+            for agent in agents:
+                action = agent.act(environment)
+                actions.append(action)
+            
+            # Update environment
+            environment.update(actions)
+            
+            # Monitor safety metrics
+            timestep_metrics = self._compute_safety_metrics(agents, environment)
+            safety_metrics[timestep] = timestep_metrics
+            
+            # Check for safety violations
+            if self._detect_safety_violation(timestep_metrics):
+                return safety_metrics, 'SAFETY_VIOLATION_DETECTED'
+        
+        return safety_metrics, 'SIMULATION_COMPLETED'
+    
+    def _compute_safety_metrics(self, agents, environment):
+        """Compute safety metrics for multi-agent system"""
+        return {
+            'cooperation_level': self._measure_cooperation(agents),
+            'resource_equality': self._measure_resource_distribution(environment),
+            'goal_alignment': self._measure_goal_alignment(agents),
+            'safety_margin': self._compute_safety_margin(environment)
+        }
+</code></pre>
+
+<div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
+<h4>🎯 Conclusion</h4>
+<p>This comprehensive guide has taken you from the fundamental mathematical foundations of Large Language Models through to the cutting-edge research frontiers and future directions. The field continues to evolve rapidly, with new architectures, training methods, and applications emerging constantly.</p>
+
+<p><strong>Key Takeaways:</strong></p>
+<ul>
+  <li>Master both theoretical foundations and practical implementations</li>
+  <li>Stay current with emerging research while maintaining solid fundamentals</li>
+  <li>Prioritize ethical considerations and safety in all developments</li>
+  <li>Engage with the broader community through open source and collaboration</li>
+  <li>Balance technical excellence with thoughtful consideration of societal impact</li>
+</ul>
+
+<p>The journey with LLMs is just beginning. As you continue to explore and contribute to this field, remember that the most impactful advances often come from combining deep technical understanding with creative thinking and responsible development practices.</p>
 </div>
-</html>
+</html>>
+
+<br>
+
+<h2 align="center">✨ Author</h2>
+
+<p align="center">
+  <b>M Wasif Anwar</b><br>
+  <i>AI/ML Engineer | Effixly AI</i>
+</p>
+
+<p align="center">
+  <a href="https://www.linkedin.com/in/mwasifanwar" target="_blank">
+    <img src="https://img.shields.io/badge/LinkedIn-blue?style=for-the-badge&logo=linkedin" alt="LinkedIn">
+  </a>
+  <a href="mailto:wasifsdk@gmail.com">
+    <img src="https://img.shields.io/badge/Email-grey?style=for-the-badge&logo=gmail" alt="Email">
+  </a>
+  <a href="https://mwasif.dev" target="_blank">
+    <img src="https://img.shields.io/badge/Website-black?style=for-the-badge&logo=google-chrome" alt="Website">
+  </a>
+  <a href="https://github.com/mwasifanwar" target="_blank">
+    <img src="https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white" alt="GitHub">
+  </a>
+</p>
+
+<footer style="border-top: 1px solid #eaeaea; margin-top: 2em; padding-top: 1em; text-align: center;">
+  <p><em>Building the future of AI, one layer at a time.</em></p>
+</footer>
+
+<br>
+
+---
+
+<div align="center">
+
+### ⭐ Don't forget to star this repository if you find it helpful!
+
+</div>
+
