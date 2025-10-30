@@ -4,6 +4,9 @@
 
 <p>A comprehensive, research-grade resource covering the complete spectrum of Large Language Models - from mathematical foundations to production deployment and ethical considerations.</p>
 
+<img width="784" height="538" alt="image" src="https://github.com/user-attachments/assets/271dbf41-e184-4c60-b256-83e87a6571e5" />
+
+
 <div style="background: #f5f5f5; padding: 15px; border-left: 4px solid #007acc; margin: 20px 0;">
 <strong>🚀 Quick Start</strong><br>
 This guide progresses from fundamental concepts to advanced research frontiers. Each chapter builds upon previous knowledge with practical implementations and mathematical rigor.
@@ -56,6 +59,9 @@ This guide progresses from fundamental concepts to advanced research frontiers. 
 </div>
 
 </div>
+
+<img width="933" height="545" alt="image" src="https://github.com/user-attachments/assets/9dcf621a-0477-40a7-8fc8-55146cdeca8d" />
+
 
 <br>
 
@@ -191,6 +197,9 @@ This guide progresses from fundamental concepts to advanced research frontiers. 
   <li><strong>Emergent Abilities</strong>: Reasoning, code generation, mathematical problem-solving</li>
 </ul>
 
+<img width="516" height="684" alt="image" src="https://github.com/user-attachments/assets/daa70c9f-111e-41f4-8d66-6bb682a07ff5" />
+
+
 <h3>1.2 Historical Evolution Timeline</h3>
 
 <table border="1" style="border-collapse: collapse; width: 100%;">
@@ -257,6 +266,9 @@ Model Scaling Timeline:
 └── Gemini Ultra (2024): ~? trillion parameters
 </code></pre>
 
+<img width="664" height="675" alt="image" src="https://github.com/user-attachments/assets/c2676e7a-bfaa-4350-b350-7ba41a5af149" />
+
+
 <h3>1.4 Current Model Landscape</h3>
 
 <p><strong>Major Model Families:</strong></p>
@@ -312,6 +324,9 @@ Input Text → Tokenization → Embedding → Transformer Blocks → Output Head
     └── Prompt/Context
 </code></pre>
 
+<img width="776" height="625" alt="image" src="https://github.com/user-attachments/assets/876b938e-24ac-46b7-b10c-06506b0d6442" />
+
+
 <h2 id="learning-path">2. Complete Learning Pathway</h2>
 
 <h3>2.1 Prerequisite Knowledge Map</h3>
@@ -358,6 +373,9 @@ Month 7-8: Transformer Architecture & Implementation
 Month 9-10: Pre-training & Fine-tuning Techniques
 Month 11-12: Advanced Topics & Research Projects
 </code></pre>
+
+<img width="487" height="602" alt="image" src="https://github.com/user-attachments/assets/33c253db-2ab0-4925-802c-edd79472e1b5" />
+
 
 <h3>2.3 Practical Project Timeline</h3>
 
@@ -809,6 +827,9 @@ Input → Token Embedding → Positional Encoding → Encoder Stack → Decoder 
     │                      └── sin/cos functions or learned
     └── WordPiece/BPE tokenization
 </code></pre>
+
+<img width="664" height="330" alt="image" src="https://github.com/user-attachments/assets/6bab9bb2-9009-4066-82c3-5cdffab6e95e" />
+
 
 <h3>6.2 Self-Attention Mechanism</h3>
 
@@ -3730,6 +3751,9 @@ class JailbreakDetector:
 <p>Beyond Chinchilla optimal scaling, research explores:</p>
 <p>$L(N, D, C) = \left(\frac{N_c}{N}\right)^{\alpha_N} + \left(\frac{D_c}{D}\right)^{\alpha_D} + \left(\frac{C_c}{C}\right)^{\alpha_C} + L_\infty$</p>
 
+<img width="455" height="217" alt="image" src="https://github.com/user-attachments/assets/dddf2a26-5557-4011-b8e2-3ab88e2e8561" />
+
+
 <p>where $C$ represents computational innovations and architectural improvements.</p>
 
 <pre><code>class AdvancedScalingPredictor:
@@ -4125,6 +4149,9 @@ class MultiAgentSafety:
   <li>Engage with the broader community through open source and collaboration</li>
   <li>Balance technical excellence with thoughtful consideration of societal impact</li>
 </ul>
+
+<img width="630" height="159" alt="image" src="https://github.com/user-attachments/assets/f4ec6f39-f8a9-48b5-8aaf-1d59da5df593" />
+
 
 <p>The journey with LLMs is just beginning. As you continue to explore and contribute to this field, remember that the most impactful advances often come from combining deep technical understanding with creative thinking and responsible development practices.</p>
 </div>
