@@ -842,9 +842,588 @@ def combined_mask(tgt, pad_token_id=0):
 </table>
 
 <div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
+<h2 id="attention-mechanisms">7. Attention Mechanisms In-Depth</h2>
+
+<h3>7.1 Attention Formalism</h3>
+
+<p><strong>General Attention Formulation:</strong></p>
+<p>Given queries $Q$, keys $K$, and values $V$, attention computes:</p>
+<p>$\text{Attention}(Q, K, V) = \sum_i \alpha(q, k_i) v_i$</p>
+<p>where $\alpha(q, k_i)$ is the attention weight between query $q$ and key $k_i$.</p>
+
+<h3>7.2 Attention Variants</h3>
+
+<table border="1" style="border-collapse: collapse; width: 100%;">
+  <tr style="background-color: #f2f2f2;">
+    <th>Type</th>
+    <th>Formula</th>
+    <th>Complexity</th>
+    <th>Use Cases</th>
+  </tr>
+  <tr>
+    <td><strong>Full Self-Attention</strong></td>
+    <td>$\text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$</td>
+    <td>$O(n^2 d)$</td>
+    <td>Standard transformers, short sequences</td>
+  </tr>
+  <tr>
+    <td><strong>Linear Attention</strong></td>
+    <td>$\phi(Q)(\phi(K)^T V)$</td>
+    <td>$O(n d^2)$</td>
+    <td>Long sequences, memory constraints</td>
+  </tr>
+  <tr>
+    <td><strong>Local Attention</strong></td>
+    <td>Window-based computation</td>
+    <td>$O(n w d)$</td>
+    <td>Images, local dependencies</td>
+  </tr>
+  <tr>
+    <td><strong>Sparse Attention</strong></td>
+    <td>Fixed/learned patterns</td>
+    <td>$O(n \sqrt{n} d)$</td>
+    <td>Very long sequences</td>
+  </tr>
+  <tr>
+    <td><strong>Low-Rank Attention</strong></td>
+    <td>Projected attention matrices</td>
+    <td>$O(n k d)$</td>
+    <td>Approximation, efficiency</td>
+  </tr>
+</table>
+
+<h3>7.3 Multi-Head Attention Mathematics</h3>
+
+<p><strong>Detailed Multi-Head Formulation:</strong></p>
+<p>For head $i$:</p>
+<p>$Q_i = Q W_i^Q, \quad K_i = K W_i^K, \quad V_i = V W_i^V$</p>
+<p>$\text{head}_i = \text{softmax}\left(\frac{Q_i K_i^T}{\sqrt{d_k}}\right) V_i$</p>
+<p>$\text{MultiHead}(Q, K, V) = \text{Concat}(\text{head}_1, ..., \text{head}_h) W^O$</p>
+
+<p><strong>Parameter Count:</strong></p>
+<p>Total parameters = $4 \times d_{\text{model}} \times d_{\text{model}}$ (for Q, K, V, O projections)</p>
+
+<h3>7.4 Efficient Attention Mechanisms</h3>
+
+<p><strong>Linformer (Low-Rank Projection):</strong></p>
+<p>$K' = E K, \quad V' = F V$ where $E, F \in \mathbb{R}^{k \times n}$</p>
+<p>Complexity reduces from $O(n^2)$ to $O(nk)$</p>
+
+<p><strong>Performer (Fast Attention via Orthogonal Random Features):</strong></p>
+<p>$\text{Attention}(Q, K, V) \approx \phi(Q) (\phi(K)^T V)$</p>
+<p>where $\phi$ is a feature map approximating softmax kernel</p>
+
+<pre><code>class EfficientAttention(nn.Module):
+    def __init__(self, d_model, num_heads, feature_dim=256):
+        super().__init__()
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.feature_dim = feature_dim
+        
+        # Random features for approximation
+        self.w = nn.Parameter(torch.randn(feature_dim, d_model // num_heads))
+        
+    def random_features(self, x):
+        # Random feature map for kernel approximation
+        x_proj = F.linear(x, self.w)
+        return torch.exp(x_proj - x_proj.max(dim=-1, keepdim=True)[0])
+    
+    def forward(self, q, k, v):
+        batch_size, seq_len = q.size(0), q.size(1)
+        
+        # Apply random feature maps
+        q_features = self.random_features(q)
+        k_features = self.random_features(k)
+        
+        # Linear attention computation
+        kv_matrix = torch.bmm(k_features.transpose(1,2), v)
+        attention_output = torch.bmm(q_features, kv_matrix)
+        
+        return attention_output
+</code></pre>
+
+<h3>7.5 Sparse Attention Patterns</h3>
+
+<p><strong>Fixed Patterns:</strong></p>
+
+<pre><code>def fixed_sparse_attention_mask(seq_len, pattern_type="strided"):
+    mask = torch.zeros(seq_len, seq_len)
+    
+    if pattern_type == "strided":
+        # Every other position attends to previous 8 positions
+        for i in range(seq_len):
+            start = max(0, i - 8)
+            mask[i, start:i+1] = 1
+            if i % 2 == 0 and i > 0:
+                mask[i, i-1] = 1
+                
+    elif pattern_type == "dilated":
+        # Dilated attention pattern
+        for i in range(seq_len):
+            for j in range(0, i+1, 2):  # Attend to every other position
+                if j <= i:
+                    mask[i, j] = 1
+                    
+    return mask.bool()
+</code></pre>
+
+<h3>7.6 Long Sequence Attention</h3>
+
+<p><strong>Sliding Window Attention:</strong></p>
+<p>Each position only attends to $w$ previous positions:</p>
+<p>$\text{Attention}(q_i, K, V) = \sum_{j=\max(0,i-w)}^{i} \alpha(q_i, k_j) v_j$</p>
+
+<p><strong>Block-Sparse Attention:</strong></p>
+<pre><code>def block_sparse_attention(q, k, v, block_size=64, num_blocks=4):
+    batch_size, seq_len, d_model = q.shape
+    
+    # Reshape into blocks
+    q_blocks = q.view(batch_size, seq_len // block_size, block_size, d_model)
+    k_blocks = k.view(batch_size, seq_len // block_size, block_size, d_model)
+    v_blocks = v.view(batch_size, seq_len // block_size, block_size, d_model)
+    
+    output = torch.zeros_like(q)
+    
+    # Each block attends to previous num_blocks blocks
+    for block_idx in range(seq_len // block_size):
+        start_block = max(0, block_idx - num_blocks + 1)
+        attended_blocks = range(start_block, block_idx + 1)
+        
+        # Compute attention within attended blocks
+        # ... implementation details ...
+        
+    return output
+</code></pre>
+
+<h2 id="training-methodologies">8. Advanced Training Methodologies</h2>
+
+<h3>8.1 Pre-training Objectives</h3>
+
+<p><strong>Autoregressive (Causal) Language Modeling:</strong></p>
+<p>$L_{\text{CLM}} = -\sum_{t=1}^T \log P(x_t | x_{&lt;t})$</p>
+
+<p><strong>Masked Language Modeling (BERT-style):</strong></p>
+<p>$L_{\text{MLM}} = -\sum_{i \in M} \log P(x_i | x_{\setminus M})$</p>
+<p>where $M$ is set of masked positions</p>
+
+<p><strong>Permutation Language Modeling (XLNet):</strong></p>
+<p>$L_{\text{PLM}} = \mathbb{E}_{z \sim Z_T} \left[ \sum_{t=1}^T \log P(x_{z_t} | x_{z_{&lt;t}}) \right]$</p>
+
+<h3>8.2 Scaling Laws</h3>
+
+<p><strong>Kaplan Scaling Laws:</strong></p>
+<p>$L(N, D) = \left(\frac{N_c}{N}\right)^{\alpha_N} + \left(\frac{D_c}{D}\right)^{\alpha_D} + L_\infty$</p>
+
+<p>where:</p>
+<ul>
+  <li>$N$: Model parameters</li>
+  <li>$D$: Training tokens</li>
+  <li>$N_c, D_c$: Critical values</li>
+  <li>$\alpha_N, \alpha_D$: Scaling exponents</li>
+  <li>$L_\infty$: Irreducible loss</li>
+</ul>
+
+<p><strong>Chinchilla Optimal Scaling:</strong></p>
+<p>For compute budget $C$, optimal model size $N$ and tokens $D$ satisfy:</p>
+<p>$N \propto C^{0.5}, \quad D \propto C^{0.5}$</p>
+
+<h3>8.3 Distributed Training Strategies</h3>
+
+<p><strong>Data Parallelism:</strong></p>
+<pre><code># PyTorch DDP Example
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+def train_ddp(rank, world_size):
+    # Initialize process group
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    
+    # Model and data
+    model = TransformerModel().to(rank)
+    ddp_model = DDP(model, device_ids=[rank])
+    
+    # Training loop
+    for batch in dataloader:
+        loss = ddp_model(batch)
+        loss.backward()
+        optimizer.step()
+</code></pre>
+
+<p><strong>Model Parallelism:</strong></p>
+<pre><code>class ModelParallelTransformer(nn.Module):
+    def __init__(self, num_devices):
+        super().__init__()
+        self.num_devices = num_devices
+        self.layers = nn.ModuleList([
+            TransformerLayer().to(f"cuda:{i % num_devices}")
+            for i in range(num_layers)
+        ])
+    
+    def forward(self, x):
+        for i, layer in enumerate(self.layers):
+            device = f"cuda:{i % self.num_devices}"
+            x = x.to(device)
+            x = layer(x)
+        return x
+</code></pre>
+
+<p><strong>Pipeline Parallelism:</strong></p>
+<pre><code>from torch.distributed.pipeline.sync import Pipe
+
+# Split model across devices
+model = LargeTransformer()
+model_parts = split_model_into_partitions(model, num_partitions=4)
+
+# Create pipeline
+model_pipe = Pipe(model_parts, chunks=8)  # Micro-batches
+
+# Training
+output = model_pipe(input)
+loss = criterion(output, target)
+loss.backward()
+</code></pre>
+
+<h3>8.4 Mixed Precision Training</h3>
+
+<p><strong>FP16/FP32 Mixed Precision:</strong></p>
+<pre><code>from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+for input, target in dataloader:
+    optimizer.zero_grad()
+    
+    with autocast():
+        output = model(input)
+        loss = criterion(output, target)
+    
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+</code></pre>
+
+<p><strong>BF16 Support:</strong></p>
+<pre><code># BF16 has better dynamic range than FP16
+torch.set_float32_matmul_precision('medium')  # Use TF32 for matmuls
+
+model = model.to(torch.bfloat16)
+for input, target in dataloader:
+    input = input.to(torch.bfloat16)
+    output = model(input)
+    # No need for gradient scaling with BF16
+</code></pre>
+
+<h3>8.5 Optimization Techniques</h3>
+
+<p><strong>AdamW Optimizer:</strong></p>
+<p>$\theta_{t+1} = \theta_t - \eta \left( \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon} + \lambda \theta_t \right)$</p>
+
+<p><strong>Learning Rate Schedules:</strong></p>
+
+<p><strong>Linear Warmup + Cosine Decay:</strong></p>
+<pre><code>def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps):
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
+        return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+</code></pre>
+
+<h3>8.6 Regularization Methods</h3>
+
+<p><strong>Weight Decay:</strong></p>
+<p>$L_{\text{total}} = L_{\text{task}} + \lambda \sum \theta^2$</p>
+
+<p><strong>Gradient Clipping:</strong></p>
+<pre><code># Global gradient clipping
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+# Per-parameter clipping
+for param in model.parameters():
+    if param.grad is not None:
+        param.grad.data.clamp_(-1.0, 1.0)
+</code></pre>
+
+<p><strong>Stochastic Depth:</strong></p>
+<pre><code>class StochasticDepth(nn.Module):
+    def __init__(self, drop_prob):
+        super().__init__()
+        self.drop_prob = drop_prob
+    
+    def forward(self, x, layer):
+        if self.training and torch.rand(1) < self.drop_prob:
+            return x  # Skip layer
+        return layer(x)
+</code></pre>
+
+<h2 id="fine-tuning-techniques">9. Fine-tuning and Adaptation</h2>
+
+<h3>9.1 Full Fine-tuning</h3>
+
+<p><strong>Standard Fine-tuning Process:</strong></p>
+<pre><code>def full_finetune(model, train_dataloader, num_epochs=3):
+    optimizer = AdamW(model.parameters(), lr=5e-5)
+    
+    for epoch in range(num_epochs):
+        model.train()
+        for batch in train_dataloader:
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+</code></pre>
+
+<h3>9.2 Parameter-Efficient Fine-tuning (PEFT)</h3>
+
+<h4>9.2.1 LoRA (Low-Rank Adaptation)</h4>
+
+<p><strong>LoRA Mathematical Formulation:</strong></p>
+<p>$W' = W + \Delta W = W + BA$</p>
+<p>where $B \in \mathbb{R}^{d \times r}$, $A \in \mathbb{R}^{r \times k}$, $r \ll \min(d,k)$</p>
+
+<pre><code>class LoRALayer(nn.Module):
+    def __init__(self, base_layer, rank=8, alpha=16):
+        super().__init__()
+        self.base_layer = base_layer
+        self.rank = rank
+        self.alpha = alpha
+        
+        # LoRA matrices
+        self.lora_A = nn.Parameter(torch.randn(base_layer.in_features, rank))
+        self.lora_B = nn.Parameter(torch.zeros(rank, base_layer.out_features))
+        
+    def forward(self, x):
+        base_output = self.base_layer(x)
+        lora_output = x @ self.lora_A @ self.lora_B
+        return base_output + (self.alpha / self.rank) * lora_output
+
+def apply_lora_to_linear_layers(model, rank=8):
+    for name, module in model.named_children():
+        if isinstance(module, nn.Linear):
+            # Replace with LoRA layer
+            setattr(model, name, LoRALayer(module, rank=rank))
+        else:
+            apply_lora_to_linear_layers(module, rank)
+</code></pre>
+
+<h4>9.2.2 Adapter Layers</h4>
+
+<pre><code>class Adapter(nn.Module):
+    def __init__(self, dim, adapter_dim=64):
+        super().__init__()
+        self.down_proj = nn.Linear(dim, adapter_dim)
+        self.up_proj = nn.Linear(adapter_dim, dim)
+        self.activation = nn.GELU()
+        
+    def forward(self, x):
+        return x + self.up_proj(self.activation(self.down_proj(x)))
+
+class TransformerWithAdapters(nn.Module):
+    def __init__(self, base_transformer):
+        super().__init__()
+        self.base = base_transformer
+        
+        # Add adapters after attention and FFN
+        for layer in self.base.layers:
+            layer.attention_adapter = Adapter(layer.self_attn.d_model)
+            layer.ffn_adapter = Adapter(layer.ffn.d_model)
+    
+    def forward(self, x):
+        for layer in self.base.layers:
+            # Original attention
+            attn_output = layer.self_attn(x)
+            x = layer.attention_adapter(attn_output)
+            
+            # Original FFN
+            ffn_output = layer.ffn(x)
+            x = layer.ffn_adapter(ffn_output)
+        
+        return x
+</code></pre>
+
+<h3>9.3 Prompt-based Methods</h3>
+
+<h4>9.3.1 Prompt Tuning</h4>
+
+<pre><code>class PromptTuning(nn.Module):
+    def __init__(self, model, prompt_length=20):
+        super().__init__()
+        self.model = model
+        self.prompt_length = prompt_length
+        self.prompt_embeddings = nn.Parameter(
+            torch.randn(prompt_length, model.config.hidden_size)
+        )
+        
+    def forward(self, input_ids, attention_mask=None):
+        batch_size = input_ids.shape[0]
+        
+        # Get original embeddings
+        inputs_embeds = self.model.get_input_embeddings()(input_ids)
+        
+        # Concatenate prompt embeddings
+        prompt_embeds = self.prompt_embeddings.unsqueeze(0).repeat(batch_size, 1, 1)
+        inputs_embeds = torch.cat([prompt_embeds, inputs_embeds], dim=1)
+        
+        # Adjust attention mask
+        if attention_mask is not None:
+            prompt_mask = torch.ones(batch_size, self.prompt_length).to(attention_mask.device)
+            attention_mask = torch.cat([prompt_mask, attention_mask], dim=1)
+        
+        return self.model(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+</code></pre>
+
+<h4>9.3.2 P-Tuning</h4>
+
+<pre><code>class PTuning(nn.Module):
+    def __init__(self, model, prompt_length=20, prompt_hidden_size=512):
+        super().__init__()
+        self.model = model
+        self.prompt_length = prompt_length
+        
+        # LSTM for prompt generation
+        self.lstm = nn.LSTM(
+            input_size=model.config.hidden_size,
+            hidden_size=prompt_hidden_size,
+            num_layers=2,
+            bidirectional=True,
+            batch_first=True
+        )
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(2 * prompt_hidden_size, model.config.hidden_size),
+            nn.ReLU(),
+            nn.Linear(model.config.hidden_size, model.config.hidden_size)
+        )
+        
+    def forward(self, input_ids, attention_mask=None):
+        batch_size = input_ids.shape[0]
+        
+        # Generate continuous prompts
+        prompt_tokens = torch.arange(self.prompt_length).unsqueeze(0).repeat(batch_size, 1)
+        prompt_embeds = self.model.get_input_embeddings()(prompt_tokens)
+        
+        # Process through LSTM and MLP
+        lstm_out, _ = self.lstm(prompt_embeds)
+        continuous_prompts = self.mlp(lstm_out)
+        
+        # Get original embeddings and concatenate
+        inputs_embeds = self.model.get_input_embeddings()(input_ids)
+        inputs_embeds = torch.cat([continuous_prompts, inputs_embeds], dim=1)
+        
+        # Adjust attention mask
+        if attention_mask is not None:
+            prompt_mask = torch.ones(batch_size, self.prompt_length).to(attention_mask.device)
+            attention_mask = torch.cat([prompt_mask, attention_mask], dim=1)
+        
+        return self.model(inputs_embeds=inputs_embeds, attention_mask=attention_mask)
+</code></pre>
+
+<h3>9.4 Instruction Tuning</h3>
+
+<p><strong>Instruction Format:</strong></p>
+<pre><code>instruction_prompt = """
+Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+### Instruction:
+{instruction}
+
+### Response:
+"""
+</code></pre>
+
+<p><strong>Supervised Fine-tuning (SFT):</strong></p>
+<pre><code>def instruction_tuning_loss(model, batch):
+    """Compute loss for instruction following"""
+    instructions = batch["instruction"]
+    responses = batch["response"]
+    
+    # Format input with instruction template
+    formatted_inputs = [
+        f"Instruction: {inst}\n\nResponse: {resp}"
+        for inst, resp in zip(instructions, responses)
+    ]
+    
+    # Tokenize and compute loss
+    inputs = tokenizer(formatted_inputs, return_tensors="pt", padding=True, truncation=True)
+    outputs = model(**inputs, labels=inputs["input_ids"])
+    
+    return outputs.loss
+</code></pre>
+
+<h3>9.5 Reinforcement Learning from Human Feedback (RLHF)</h3>
+
+<p><strong>Three-Stage RLHF Process:</strong></p>
+
+<pre><code># Stage 1: Supervised Fine-tuning
+sft_trainer = SFTTrainer(
+    model=base_model,
+    train_dataset=instruction_data,
+    formatting_func=format_instruction
+)
+
+# Stage 2: Reward Model Training
+class RewardModel(nn.Module):
+    def __init__(self, base_model):
+        super().__init__()
+        self.transformer = base_model
+        self.value_head = nn.Linear(base_model.config.hidden_size, 1)
+    
+    def forward(self, input_ids, attention_mask):
+        outputs = self.transformer(input_ids, attention_mask=attention_mask)
+        last_hidden_state = outputs.last_hidden_state
+        # Use the EOS token for reward prediction
+        eos_token_hidden = last_hidden_state[:, -1, :]
+        reward = self.value_head(eos_token_hidden)
+        return reward
+
+# Stage 3: PPO Training
+def ppo_training_step(policy_model, reward_model, prompts):
+    # Generate responses with current policy
+    with torch.no_grad():
+        old_responses = policy_model.generate(prompts)
+        old_rewards = reward_model(old_responses)
+    
+    # Update policy using PPO
+    # ... PPO implementation details ...
+</code></pre>
+
+<h3>9.6 Evaluation Metrics for Fine-tuning</h3>
+
+<table border="1" style="border-collapse: collapse; width: 100%;">
+  <tr style="background-color: #f2f2f2;">
+    <th>Metric</th>
+    <th>Formula</th>
+    <th>Interpretation</th>
+  </tr>
+  <tr>
+    <td><strong>Perplexity</strong></td>
+    <td>$\exp\left(-\frac{1}{N}\sum_{i=1}^N \log P(w_i|w_{&lt;i})\right)$</td>
+    <td>Lower is better</td>
+  </tr>
+  <tr>
+    <td><strong>BLEU Score</strong></td>
+    <td>BP $\cdot$ $\exp\left(\sum_{n=1}^N w_n \log p_n\right)$</td>
+    <td>0-100, higher better</td>
+  </tr>
+  <tr>
+    <td><strong>ROUGE Score</strong></td>
+    <td>$\frac{\text{Overlap}}{\text{Reference Length}}$</td>
+    <td>Recall-oriented</td>
+  </tr>
+  <tr>
+    <td><strong>Accuracy</strong></td>
+    <td>$\frac{\text{Correct}}{\text{Total}}$</td>
+    <td>Classification tasks</td>
+  </tr>
+</table>
+
+<div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
 <h4>📚 Next Chapters Preview</h4>
-<p><strong>Chapter 7</strong>: Attention Mechanisms In-Depth (multi-head, sparse, linear attention)<br>
-<strong>Chapter 8</strong>: Advanced Training Methodologies (pre-training, RLHF, curriculum learning)<br>
-<strong>Chapter 9</strong>: Fine-tuning and Adaptation (LoRA, adapter layers, prompt tuning)</p>
+<p><strong>Chapter 10</strong>: Inference Optimization (quantization, pruning, speculative decoding)<br>
+<strong>Chapter 11</strong>: Comprehensive Evaluation (benchmarks, safety, robustness)<br>
+<strong>Chapter 12</strong>: Production Deployment (serving, monitoring, scaling)</p>
 </div>
 </html>
