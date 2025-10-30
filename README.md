@@ -1421,9 +1421,1178 @@ def ppo_training_step(policy_model, reward_model, prompts):
 </table>
 
 <div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
+<h2 id="inference-optimization">10. Inference Optimization</h2>
+
+<h3>10.1 Quantization Techniques</h3>
+
+<p><strong>Mathematical Foundation of Quantization:</strong></p>
+<p>For floating-point tensor $X$ to integer tensor $X_q$:</p>
+<p>$X_q = \text{round}\left(\frac{X - \beta}{\alpha}\right)$</p>
+<p>where $\alpha = \frac{\max(X) - \min(X)}{2^b - 1}$, $\beta = \min(X)$</p>
+
+<p><strong>Dequantization:</strong></p>
+<p>$X_{\text{dequant}} = X_q \times \alpha + \beta$</p>
+
+<h4>10.1.1 Post-Training Quantization (PTQ)</h4>
+
+<pre><code>import torch
+import torch.quantization
+
+def post_training_quantization(model, calibration_loader):
+    # Set model to evaluation mode
+    model.eval()
+    
+    # Prepare model for quantization
+    model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+    torch.quantization.prepare(model, inplace=True)
+    
+    # Calibrate with sample data
+    with torch.no_grad():
+        for batch in calibration_loader:
+            model(batch)
+    
+    # Convert to quantized model
+    torch.quantization.convert(model, inplace=True)
+    return model
+
+# Example usage for linear layer quantization
+class QuantizedLinear(torch.nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = torch.nn.Parameter(torch.randn(out_features, in_features))
+        self.weight_scale = torch.nn.Parameter(torch.tensor(1.0))
+        self.weight_zero_point = torch.nn.Parameter(torch.tensor(0))
+        
+    def forward(self, x):
+        # Quantize weights
+        weight_q = torch.quantize_per_tensor(
+            self.weight, self.weight_scale, self.weight_zero_point, torch.qint8
+        )
+        # Dequantize for computation (in real scenario, use quantized ops)
+        weight_dequant = weight_q.dequantize()
+        return torch.nn.functional.linear(x, weight_dequant)
+</code></pre>
+
+<h4>10.1.2 Quantization-Aware Training (QAT)</h4>
+
+<pre><code>class QATLinear(torch.nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = torch.nn.Parameter(torch.randn(out_features, in_features))
+        
+        # Quantization stubs
+        self.weight_quant = torch.quantization.QuantStub()
+        self.weight_dequant = torch.quantization.DeQuantStub()
+        
+    def forward(self, x):
+        # Simulate quantization during training
+        weight_quantized = self.weight_quant(self.weight)
+        weight = self.weight_dequant(weight_quantized)
+        return torch.nn.functional.linear(x, weight)
+
+def prepare_qat(model):
+    # Fuse layers for better quantization
+    torch.quantization.fuse_modules(model, [['conv', 'bn', 'relu']], inplace=True)
+    
+    # Prepare for QAT
+    model.qconfig = torch.quantization.get_default_qat_qconfig('fbgemm')
+    torch.quantization.prepare_qat(model, inplace=True)
+    return model
+</code></pre>
+
+<h4>10.1.3 Mixed-Precision Quantization</h4>
+
+<pre><code>def mixed_precision_quantization(model, sensitivity_analysis):
+    """Apply different precision based on layer sensitivity"""
+    quantization_config = {}
+    
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.Linear):
+            sensitivity = sensitivity_analysis[name]
+            
+            if sensitivity < 0.1:  # Low sensitivity
+                # Use 4-bit quantization
+                config = torch.quantization.QConfig(
+                    activation=torch.quantization.MinMaxObserver.with_args(dtype=torch.quint4),
+                    weight=torch.quantization.MinMaxObserver.with_args(dtype=torch.qint4)
+                )
+            elif sensitivity < 0.3:  # Medium sensitivity
+                # Use 8-bit quantization
+                config = torch.quantization.default_qconfig
+            else:  # High sensitivity
+                # Keep in FP16
+                config = None
+                
+            quantization_config[name] = config
+    
+    return quantization_config
+</code></pre>
+
+<h3>10.2 Pruning Methods</h3>
+
+<p><strong>Magnitude-Based Pruning:</strong></p>
+<p>Remove weights with smallest magnitudes:</p>
+<p>$W_{\text{pruned}}[i,j] = \begin{cases} 0 & \text{if } |W[i,j]| < \theta \\ W[i,j] & \text{otherwise} \end{cases}$</p>
+
+<pre><code>class MagnitudePruning:
+    def __init__(self, pruning_rate=0.2):
+        self.pruning_rate = pruning_rate
+    
+    def apply(self, model):
+        all_weights = []
+        for name, param in model.named_parameters():
+            if 'weight' in name and len(param.shape) >= 2:  # Only weight matrices
+                all_weights.append(param.data.abs().view(-1))
+        
+        # Calculate global threshold
+        all_weights = torch.cat(all_weights)
+        threshold = torch.quantile(all_weights, self.pruning_rate)
+        
+        # Apply pruning
+        for name, param in model.named_parameters():
+            if 'weight' in name and len(param.shape) >= 2:
+                mask = param.data.abs() > threshold
+                param.data *= mask.float()
+        
+        return model
+
+def iterative_pruning(model, dataloader, total_iterations=10, target_sparsity=0.8):
+    """Iterative pruning with fine-tuning"""
+    initial_sparsity = 0.0
+    sparsity_increment = (target_sparsity - initial_sparsity) / total_iterations
+    
+    for iteration in range(total_iterations):
+        # Prune
+        current_sparsity = initial_sparsity + (iteration + 1) * sparsity_increment
+        pruning = MagnitudePruning(pruning_rate=current_sparsity)
+        model = pruning.apply(model)
+        
+        # Fine-tune
+        fine_tune_model(model, dataloader, epochs=1)
+    
+    return model
+</code></pre>
+
+<p><strong>Structured Pruning:</strong></p>
+
+<pre><code>class StructuredPruning:
+    def __init__(self, pruning_method='l1'):
+        self.pruning_method = pruning_method
+    
+    def compute_importance(self, weight):
+        if self.pruning_method == 'l1':
+            return torch.norm(weight, p=1, dim=1)  # L1 norm of rows
+        elif self.pruning_method == 'l2':
+            return torch.norm(weight, p=2, dim=1)  # L2 norm of rows
+    
+    def prune_neurons(self, model, pruning_rate):
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                importance = self.compute_importance(module.weight)
+                
+                # Calculate threshold
+                threshold = torch.quantile(importance, pruning_rate)
+                
+                # Create mask for important neurons
+                mask = importance > threshold
+                
+                # Apply mask to output dimension
+                module.weight.data = module.weight.data[mask, :]
+                if module.bias is not None:
+                    module.bias.data = module.bias.data[mask]
+                
+                # Update output features
+                module.out_features = mask.sum().item()
+        
+        return model
+</code></pre>
+
+<h3>10.3 Knowledge Distillation</h3>
+
+<p><strong>Distillation Loss:</strong></p>
+<p>$L_{\text{distill}} = \alpha \cdot L_{\text{CE}}(y_{\text{student}}, y_{\text{true}}) + (1-\alpha) \cdot \tau^2 \cdot \text{KL}(p_{\text{teacher}}^\tau \| p_{\text{student}}^\tau)$</p>
+
+<p>where $p^\tau = \text{softmax}(z/\tau)$</p>
+
+<pre><code>class KnowledgeDistillationLoss(torch.nn.Module):
+    def __init__(self, temperature=4.0, alpha=0.7):
+        super().__init__()
+        self.temperature = temperature
+        self.alpha = alpha
+        self.ce_loss = torch.nn.CrossEntropyLoss()
+        self.kl_loss = torch.nn.KLDivLoss(reduction='batchmean')
+    
+    def forward(self, student_logits, teacher_logits, labels):
+        # Soften the probabilities
+        student_probs = torch.nn.functional.log_softmax(student_logits / self.temperature, dim=-1)
+        teacher_probs = torch.nn.functional.softmax(teacher_logits / self.temperature, dim=-1)
+        
+        # Calculate distillation loss
+        distill_loss = self.kl_loss(student_probs, teacher_probs) * (self.temperature ** 2)
+        
+        # Calculate student loss
+        student_loss = self.ce_loss(student_logits, labels)
+        
+        # Combined loss
+        return self.alpha * student_loss + (1 - self.alpha) * distill_loss
+
+def distill_training(student, teacher, dataloader, epochs=10):
+    criterion = KnowledgeDistillationLoss()
+    optimizer = torch.optim.Adam(student.parameters())
+    
+    for epoch in range(epochs):
+        for batch in dataloader:
+            inputs, labels = batch
+            
+            # Get teacher predictions (no gradient)
+            with torch.no_grad():
+                teacher_logits = teacher(inputs)
+            
+            # Student forward pass
+            student_logits = student(inputs)
+            
+            # Compute distillation loss
+            loss = criterion(student_logits, teacher_logits, labels)
+            
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+</code></pre>
+
+<h3>10.4 Advanced Inference Techniques</h3>
+
+<h4>10.4.1 Speculative Decoding</h4>
+
+<pre><code>class SpeculativeDecoding:
+    def __init__(self, target_model, draft_model, max_speculative_tokens=5):
+        self.target_model = target_model
+        self.draft_model = draft_model
+        self.max_speculative_tokens = max_speculative_tokens
+    
+    def generate(self, prompt, max_length=100):
+        sequences = prompt
+        draft_sequences = prompt
+        
+        while len(sequences[0]) < max_length:
+            # Draft phase: generate multiple tokens quickly
+            draft_tokens = []
+            for _ in range(self.max_speculative_tokens):
+                draft_logits = self.draft_model(draft_sequences)
+                next_token = torch.argmax(draft_logits[:, -1, :], dim=-1)
+                draft_tokens.append(next_token)
+                draft_sequences = torch.cat([draft_sequences, next_token.unsqueeze(-1)], dim=-1)
+            
+            # Verification phase: check with target model
+            target_logits = self.target_model(draft_sequences)
+            target_probs = torch.softmax(target_logits, dim=-1)
+            
+            # Verify and accept tokens
+            accepted_tokens = self._verify_tokens(draft_tokens, target_probs)
+            
+            if len(accepted_tokens) > 0:
+                sequences = torch.cat([sequences] + accepted_tokens, dim=-1)
+            else:
+                # If no tokens accepted, generate one from target model
+                next_token = torch.argmax(target_probs[:, -1, :], dim=-1)
+                sequences = torch.cat([sequences, next_token.unsqueeze(-1)], dim=-1)
+        
+        return sequences
+    
+    def _verify_tokens(self, draft_tokens, target_probs):
+        accepted_tokens = []
+        for i, token in enumerate(draft_tokens):
+            target_prob = target_probs[:, i, token]
+            draft_prob = # probability from draft model
+            
+            # Acceptance criteria
+            if torch.rand(1) < torch.min(torch.tensor(1.0), target_prob / draft_prob):
+                accepted_tokens.append(token.unsqueeze(-1))
+            else:
+                break
+        
+        return accepted_tokens
+</code></pre>
+
+<h4>10.4.2 KV Caching</h4>
+
+<pre><code>class KVCache:
+    def __init__(self, batch_size, max_length, num_heads, head_dim):
+        self.k_cache = torch.zeros(batch_size, max_length, num_heads, head_dim)
+        self.v_cache = torch.zeros(batch_size, max_length, num_heads, head_dim)
+        self.current_length = 0
+    
+    def update(self, new_k, new_v):
+        batch_size, seq_len = new_k.shape[0], new_k.shape[1]
+        
+        # Append new keys and values to cache
+        self.k_cache[:, self.current_length:self.current_length+seq_len] = new_k
+        self.v_cache[:, self.current_length:self.current_length+seq_len] = new_v
+        
+        self.current_length += seq_len
+        
+        return (self.k_cache[:, :self.current_length],
+                self.v_cache[:, :self.current_length])
+
+class EfficientTransformerInference:
+    def __init__(self, model, max_cache_length=2048):
+        self.model = model
+        self.kv_cache = None
+        self.max_cache_length = max_cache_length
+    
+    def generate(self, input_ids, max_length=100):
+        if self.kv_cache is None:
+            self._initialize_cache(input_ids.shape[0])
+        
+        sequences = input_ids
+        
+        for _ in range(max_length - input_ids.shape[1]):
+            # Only process the last token for autoregressive generation
+            if sequences.shape[1] > 1:
+                current_input = sequences[:, -1:]
+            else:
+                current_input = sequences
+            
+            # Forward pass with KV cache
+            outputs = self.model(
+                current_input,
+                past_key_values=self.kv_cache,
+                use_cache=True
+            )
+            
+            # Update KV cache
+            self.kv_cache = outputs.past_key_values
+            
+            # Get next token
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
+            
+            sequences = torch.cat([sequences, next_token], dim=-1)
+        
+        return sequences
+    
+    def _initialize_cache(self, batch_size):
+        num_heads = self.model.config.num_attention_heads
+        head_dim = self.model.config.hidden_size // num_heads
+        
+        self.kv_cache = [
+            (torch.zeros(batch_size, self.max_cache_length, num_heads, head_dim),
+             torch.zeros(batch_size, self.max_cache_length, num_heads, head_dim))
+            for _ in range(self.model.config.num_hidden_layers)
+        ]
+</code></pre>
+
+<h4>10.4.3 Continuous Batching</h4>
+
+<pre><code>class ContinuousBatchingInference:
+    def __init__(self, model, max_batch_size=32):
+        self.model = model
+        self.max_batch_size = max_batch_size
+        self.requests = []
+        self.kv_caches = {}
+    
+    def add_request(self, prompt, request_id):
+        self.requests.append({
+            'id': request_id,
+            'prompt': prompt,
+            'tokens': [prompt],
+            'finished': False
+        })
+        
+        # Initialize KV cache for this request
+        self.kv_caches[request_id] = self._initialize_kv_cache()
+    
+    def process_batch(self):
+        # Group requests that are ready for next token
+        batch_requests = []
+        batch_inputs = []
+        batch_kv_caches = []
+        
+        for req in self.requests:
+            if not req['finished']:
+                batch_requests.append(req)
+                batch_inputs.append(req['tokens'][-1])  # Last token
+                batch_kv_caches.append(self.kv_caches[req['id']])
+        
+        if not batch_requests:
+            return
+        
+        # Process batch
+        batch_outputs = self._process_batch_inference(
+            batch_inputs, batch_kv_caches
+        )
+        
+        # Update requests
+        for i, req in enumerate(batch_requests):
+            next_token = batch_outputs[i]
+            req['tokens'].append(next_token)
+            
+            # Check for completion
+            if next_token == self.model.config.eos_token_id:
+                req['finished'] = True
+    
+    def _process_batch_inference(self, batch_inputs, batch_kv_caches):
+        # Implement batched inference with separate KV caches
+        # This is a simplified version
+        batch_tensor = torch.stack(batch_inputs)
+        
+        # Process through model (would need custom implementation for separate KV caches)
+        outputs = self.model(batch_tensor)
+        next_tokens = torch.argmax(outputs.logits[:, -1, :], dim=-1)
+        
+        return next_tokens
+</code></pre>
+
+<h2 id="evaluation-framework">11. Comprehensive Evaluation</h2>
+
+<h3>11.1 Intrinsic Evaluation Metrics</h3>
+
+<p><strong>Perplexity:</strong></p>
+<p>$\text{PPL} = \exp\left(-\frac{1}{N}\sum_{i=1}^N \log P(w_i | w_{&lt;i})\right)$</p>
+
+<p><strong>Bits per Character (BPC):</strong></p>
+<p>$\text{BPC} = \frac{1}{N}\sum_{i=1}^N -\log_2 P(w_i | w_{&lt;i})$</p>
+
+<pre><code>def calculate_perplexity(model, tokenizer, text_dataset):
+    total_log_likelihood = 0
+    total_tokens = 0
+    
+    model.eval()
+    with torch.no_grad():
+        for text in text_dataset:
+            inputs = tokenizer(text, return_tensors='pt')
+            outputs = model(**inputs, labels=inputs['input_ids'])
+            
+            # Negative log likelihood
+            nll = outputs.loss * inputs['input_ids'].numel()
+            total_log_likelihood += nll.item()
+            total_tokens += inputs['input_ids'].numel()
+    
+    avg_nll = total_log_likelihood / total_tokens
+    perplexity = torch.exp(torch.tensor(avg_nll))
+    return perplexity.item()
+
+def calculate_bits_per_character(model, tokenizer, text):
+    """Calculate bits per character for text generation models"""
+    total_bits = 0
+    total_chars = 0
+    
+    # Tokenize and process text
+    tokens = tokenizer.encode(text)
+    
+    for i in range(1, len(tokens)):
+        # Get probability of next token
+        input_ids = torch.tensor([tokens[:i]])
+        with torch.no_grad():
+            outputs = model(input_ids)
+            probs = torch.softmax(outputs.logits[0, -1], dim=-1)
+            token_prob = probs[tokens[i]].item()
+        
+        # Convert to bits
+        bits = -math.log2(token_prob) if token_prob > 0 else float('inf')
+        total_bits += bits
+    
+    total_chars = len(text)
+    return total_bits / total_chars
+</code></pre>
+
+<h3>11.2 Extrinsic Evaluation Benchmarks</h3>
+
+<h4>11.2.1 General Language Understanding</h4>
+
+<pre><code>class GLUEEvaluator:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.tasks = {
+            'cola': self.evaluate_cola,
+            'sst2': self.evaluate_sst2,
+            'mrpc': self.evaluate_mrpc,
+            'qqp': self.evaluate_qqp,
+            'mnli': self.evaluate_mnli
+        }
+    
+    def evaluate_all(self, datasets):
+        results = {}
+        for task_name, dataset in datasets.items():
+            if task_name in self.tasks:
+                accuracy = self.tasks[task_name](dataset)
+                results[task_name] = accuracy
+        return results
+    
+    def evaluate_sst2(self, dataset):
+        """Sentiment classification accuracy"""
+        correct = 0
+        total = 0
+        
+        for text, label in dataset:
+            inputs = self.tokenizer(text, return_tensors='pt', truncation=True)
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                prediction = torch.argmax(outputs.logits, dim=-1).item()
+            
+            if prediction == label:
+                correct += 1
+            total += 1
+        
+        return correct / total
+
+class MMLUEvaluator:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+    
+    def evaluate_subject(self, subject_name, test_data):
+        """Evaluate on specific MMLU subject"""
+        correct = 0
+        total = 0
+        
+        for question_data in test_data:
+            question = question_data['question']
+            choices = question_data['choices']
+            answer = question_data['answer']
+            
+            # Format as multiple choice
+            prompt = self._format_mmlu_prompt(question, choices)
+            
+            # Get model probabilities for each choice
+            choice_probs = []
+            for choice in choices:
+                full_prompt = prompt + choice
+                inputs = self.tokenizer(full_prompt, return_tensors='pt')
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
+                    # Use last token probability
+                    logits = outputs.logits[0, -1, :]
+                    prob = torch.softmax(logits, dim=-1)[self.tokenizer.eos_token_id]
+                    choice_probs.append(prob.item())
+            
+            # Predict highest probability choice
+            predicted = np.argmax(choice_probs)
+            if predicted == answer:
+                correct += 1
+            total += 1
+        
+        return correct / total
+</code></pre>
+
+<h4>11.2.2 Reasoning and Mathematical Ability</h4>
+
+<pre><code>class GSM8KEvaluator:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+    
+    def evaluate(self, dataset):
+        correct = 0
+        total = 0
+        
+        for problem_data in dataset:
+            problem = problem_data['question']
+            answer = problem_data['answer']
+            
+            # Use chain-of-thought prompting
+            cot_prompt = f"Q: {problem}\nA: Let's think step by step."
+            
+            # Generate reasoning
+            inputs = self.tokenizer(cot_prompt, return_tensors='pt')
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_length=len(inputs['input_ids'][0]) + 200,
+                    temperature=0.7,
+                    do_sample=True
+                )
+            
+            generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            # Extract final answer
+            final_answer = self._extract_answer(generated_text)
+            
+            if self._compare_answers(final_answer, answer):
+                correct += 1
+            total += 1
+        
+        return correct / total
+
+class HumanEvalEvaluator:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+    
+    def evaluate_code_generation(self, problems):
+        """Evaluate on HumanEval code generation benchmark"""
+        pass_at_k = {1: 0, 5: 0, 10: 0}
+        total = len(problems)
+        
+        for problem in problems:
+            prompt = problem['prompt']
+            test_cases = problem['test']
+            
+            # Generate multiple solutions
+            solutions = self._generate_solutions(prompt, num_samples=10)
+            
+            # Test solutions
+            for k in [1, 5, 10]:
+                passed = any(self._test_solution(sol, test_cases) 
+                           for sol in solutions[:k])
+                if passed:
+                    pass_at_k[k] += 1
+        
+        # Calculate pass@k scores
+        return {k: count/total for k, count in pass_at_k.items()}
+</code></pre>
+
+<h3>11.3 Safety and Alignment Evaluation</h3>
+
+<pre><code>class SafetyEvaluator:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.harmful_prompts = self._load_harmful_prompts()
+    
+    def evaluate_refusal_rate(self):
+        """Measure how often model refuses harmful requests"""
+        refusal_count = 0
+        total_prompts = len(self.harmful_prompts)
+        
+        for prompt in self.harmful_prompts:
+            inputs = self.tokenizer(prompt, return_tensors='pt')
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **inputs,
+                    max_length=len(inputs['input_ids'][0]) + 50,
+                    temperature=0.7
+                )
+            
+            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            if self._is_refusal(response):
+                refusal_count += 1
+        
+        return refusal_count / total_prompts
+    
+    def evaluate_truthfulness(self, truthfulqa_dataset):
+        """Evaluate using TruthfulQA benchmark"""
+        correct = 0
+        total = 0
+        
+        for qa_pair in truthfulqa_dataset:
+            question = qa_pair['question']
+            correct_answer = qa_pair['correct_answer']
+            incorrect_answers = qa_pair['incorrect_answers']
+            
+            # Test if model prefers correct answer
+            preference = self._measure_answer_preference(
+                question, correct_answer, incorrect_answers
+            )
+            
+            if preference == 'correct':
+                correct += 1
+            total += 1
+        
+        return correct / total
+
+class BiasEvaluator:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+    
+    def evaluate_stereotypes(self, stereotype_dataset):
+        """Measure stereotype amplification"""
+        stereotype_scores = []
+        
+        for example in stereotype_dataset:
+            context = example['context']
+            stereotype_completion = example['stereotype']
+            non_stereotype_completion = example['non_stereotype']
+            
+            # Measure probability of each completion
+            prob_stereotype = self._get_completion_probability(
+                context, stereotype_completion
+            )
+            prob_non_stereotype = self._get_completion_probability(
+                context, non_stereotype_completion
+            )
+            
+            # Calculate stereotype score
+            score = prob_stereotype / (prob_stereotype + prob_non_stereotype)
+            stereotype_scores.append(score)
+        
+        return np.mean(stereotype_scores)
+</code></pre>
+
+<h2 id="production-deployment">12. Production Deployment</h2>
+
+<h3>12.1 Model Serving Architectures</h3>
+
+<h4>12.1.1 Real-time Serving with FastAPI</h4>
+
+<pre><code>from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import torch
+import asyncio
+from typing import List
+
+app = FastAPI(title="LLM Inference API")
+
+class GenerationRequest(BaseModel):
+    prompt: str
+    max_length: int = 100
+    temperature: float = 0.7
+    top_p: float = 0.9
+    do_sample: bool = True
+
+class GenerationResponse(BaseModel):
+    generated_text: str
+    inference_time: float
+    tokens_generated: int
+
+class InferenceEngine:
+    def __init__(self, model_path):
+        self.model = self._load_model(model_path)
+        self.tokenizer = self._load_tokenizer(model_path)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        
+    def generate(self, request: GenerationRequest) -> GenerationResponse:
+        start_time = time.time()
+        
+        # Tokenize input
+        inputs = self.tokenizer(request.prompt, return_tensors="pt").to(self.device)
+        
+        # Generate
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_length=request.max_length,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                do_sample=request.do_sample,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+        
+        # Decode
+        generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        inference_time = time.time() - start_time
+        tokens_generated = len(outputs[0]) - len(inputs['input_ids'][0])
+        
+        return GenerationResponse(
+            generated_text=generated_text,
+            inference_time=inference_time,
+            tokens_generated=tokens_generated
+        )
+
+# Global inference engine
+inference_engine = InferenceEngine("path/to/model")
+
+@app.post("/generate", response_model=GenerationResponse)
+async def generate_text(request: GenerationRequest):
+    try:
+        response = inference_engine.generate(request)
+        return response
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "model_loaded": True}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+</code></pre>
+
+<h4>12.1.2 Batch Processing Service</h4>
+
+<pre><code>import redis
+from celery import Celery
+from typing import List, Dict
+import json
+
+# Celery app for async task processing
+celery_app = Celery('llm_worker', broker='redis://localhost:6379/0')
+
+class BatchInferenceEngine:
+    def __init__(self, model_path, batch_size=32):
+        self.model = self._load_model(model_path)
+        self.tokenizer = self._load_tokenizer(model_path)
+        self.batch_size = batch_size
+        self.padding_queue = []
+    
+    def add_to_batch(self, prompt: str, request_id: str):
+        """Add prompt to current batch"""
+        self.padding_queue.append({
+            'prompt': prompt,
+            'request_id': request_id,
+            'added_time': time.time()
+        })
+        
+        # Process batch if full or timeout
+        if len(self.padding_queue) >= self.batch_size:
+            self._process_batch()
+    
+    def _process_batch(self):
+        if not self.padding_queue:
+            return
+        
+        # Prepare batch
+        prompts = [item['prompt'] for item in self.padding_queue]
+        request_ids = [item['request_id'] for item in self.padding_queue]
+        
+        # Tokenize with padding
+        inputs = self.tokenizer(
+            prompts, 
+            return_tensors="pt", 
+            padding=True, 
+            truncation=True,
+            max_length=512
+        )
+        
+        # Generate
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_length=100,
+                do_sample=True,
+                temperature=0.7
+            )
+        
+        # Decode and store results
+        for i, output in enumerate(outputs):
+            generated_text = self.tokenizer.decode(output, skip_special_tokens=True)
+            self._store_result(request_ids[i], generated_text)
+        
+        # Clear queue
+        self.padding_queue = []
+
+@celery_app.task
+def process_batch_generation(prompts: List[str]) -> List[str]:
+    """Celery task for batch processing"""
+    inference_engine = BatchInferenceEngine("path/to/model")
+    return inference_engine.process_batch(prompts)
+
+# Redis for result storage
+redis_client = redis.Redis(host='localhost', port=6379, db=0)
+
+def submit_batch_job(prompts: List[str]) -> str:
+    """Submit batch job and return job ID"""
+    job_id = str(uuid.uuid4())
+    
+    # Store prompts in Redis
+    redis_client.setex(
+        f"batch_prompts:{job_id}", 
+        3600,  # 1 hour expiry
+        json.dumps(prompts)
+    )
+    
+    # Start async processing
+    process_batch_generation.delay(prompts)
+    
+    return job_id
+
+def get_batch_results(job_id: str) -> List[str]:
+    """Retrieve batch results"""
+    results_key = f"batch_results:{job_id}"
+    if redis_client.exists(results_key):
+        return json.loads(redis_client.get(results_key))
+    return None
+</code></pre>
+
+<h3>12.2 Scaling and Load Balancing</h3>
+
+<h4>12.2.1 Model Parallelism in Production</h4>
+
+<pre><code>class DistributedInferenceService:
+    def __init__(self, model_name, num_gpus=4):
+        self.num_gpus = num_gpus
+        self.model_parts = self._split_model_across_gpus(model_name)
+        
+    def _split_model_across_gpus(self, model_name):
+        """Split transformer layers across multiple GPUs"""
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        layers_per_gpu = len(model.transformer.h) // self.num_gpus
+        
+        model_parts = []
+        for i in range(self.num_gpus):
+            start_layer = i * layers_per_gpu
+            end_layer = (i + 1) * layers_per_gpu if i < self.num_gpus - 1 else len(model.transformer.h)
+            
+            # Move subset of layers to this GPU
+            gpu_layers = model.transformer.h[start_layer:end_layer]
+            for layer in gpu_layers:
+                layer.to(f"cuda:{i}")
+            
+            model_parts.append({
+                'gpu_id': i,
+                'layers': gpu_layers,
+                'start_layer': start_layer,
+                'end_layer': end_layer
+            })
+        
+        return model_parts
+    
+    def distributed_forward(self, hidden_states, attention_mask=None):
+        """Forward pass through distributed model"""
+        current_states = hidden_states
+        
+        for model_part in self.model_parts:
+            # Move input to correct GPU
+            current_states = current_states.to(f"cuda:{model_part['gpu_id']}")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(f"cuda:{model_part['gpu_id']}")
+            
+            # Process through layers on this GPU
+            for layer in model_part['layers']:
+                current_states = layer(current_states, attention_mask=attention_mask)[0]
+        
+        return current_states
+</code></pre>
+
+<h4>12.2.2 Load Balancer Configuration</h4>
+
+<pre><code>from flask import Flask, request, jsonify
+import requests
+import threading
+import time
+
+class LoadBalancer:
+    def __init__(self, worker_urls):
+        self.worker_urls = worker_urls
+        self.worker_stats = {url: {'requests': 0, 'errors': 0, 'last_health_check': 0} 
+                           for url in worker_urls}
+        self.lock = threading.Lock()
+        
+    def get_healthy_workers(self):
+        """Get list of healthy workers based on recent health checks"""
+        healthy_workers = []
+        current_time = time.time()
+        
+        for url, stats in self.worker_stats.items():
+            # Consider worker healthy if checked within last 30 seconds
+            if current_time - stats['last_health_check'] < 30:
+                healthy_workers.append(url)
+        
+        return healthy_workers
+    
+    def get_least_loaded_worker(self):
+        """Select worker with least current load"""
+        healthy_workers = self.get_healthy_workers()
+        if not healthy_workers:
+            return None
+        
+        # Simple round-robin for now, could be enhanced with actual load metrics
+        with self.lock:
+            selected = min(healthy_workers, 
+                         key=lambda url: self.worker_stats[url]['requests'])
+            self.worker_stats[selected]['requests'] += 1
+        
+        return selected
+    
+    def forward_request(self, prompt_data):
+        """Forward request to selected worker"""
+        worker_url = self.get_least_loaded_worker()
+        if not worker_url:
+            return {"error": "No healthy workers available"}
+        
+        try:
+            response = requests.post(
+                f"{worker_url}/generate",
+                json=prompt_data,
+                timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            with self.lock:
+                self.worker_stats[worker_url]['errors'] += 1
+            return {"error": f"Worker error: {str(e)}"}
+
+# Flask app as load balancer
+app = Flask(__name__)
+load_balancer = LoadBalancer([
+    "http://worker1:8000",
+    "http://worker2:8000", 
+    "http://worker3:8000"
+])
+
+@app.route('/generate', methods=['POST'])
+def generate_text():
+    data = request.get_json()
+    result = load_balancer.forward_request(data)
+    return jsonify(result)
+
+def health_check_worker():
+    """Background thread to check worker health"""
+    while True:
+        for worker_url in load_balancer.worker_urls:
+            try:
+                response = requests.get(f"{worker_url}/health", timeout=5)
+                if response.status_code == 200:
+                    with load_balancer.lock:
+                        load_balancer.worker_stats[worker_url]['last_health_check'] = time.time()
+            except requests.RequestException:
+                # Worker is unhealthy
+                pass
+        
+        time.sleep(10)  # Check every 10 seconds
+
+# Start health check thread
+health_thread = threading.Thread(target=health_check_worker, daemon=True)
+health_thread.start()
+</code></pre>
+
+<h3>12.3 Monitoring and Observability</h3>
+
+<pre><code>import prometheus_client
+from prometheus_client import Counter, Histogram, Gauge
+import time
+import logging
+
+# Prometheus metrics
+REQUEST_COUNT = Counter('llm_requests_total', 'Total requests', ['model', 'status'])
+REQUEST_DURATION = Histogram('llm_request_duration_seconds', 'Request duration')
+MODEL_LOAD_GAUGE = Gauge('llm_model_loaded', 'Model loaded status')
+GPU_MEMORY_GAUGE = Gauge('llm_gpu_memory_usage', 'GPU memory usage', ['gpu_id'])
+
+class MonitoringMiddleware:
+    def __init__(self, app, model_name):
+        self.app = app
+        self.model_name = model_name
+    
+    def __call__(self, environ, start_response):
+        start_time = time.time()
+        
+        def custom_start_response(status, headers, exc_info=None):
+            # Record metrics
+            duration = time.time() - start_time
+            status_code = int(status.split(' ')[0])
+            
+            REQUEST_COUNT.labels(model=self.model_name, status=status_code).inc()
+            REQUEST_DURATION.observe(duration)
+            
+            return start_response(status, headers, exc_info)
+        
+        return self.app(environ, custom_start_response)
+
+class PerformanceMonitor:
+    def __init__(self):
+        self.metrics = {
+            'throughput': 0,
+            'latency_p50': 0,
+            'latency_p95': 0,
+            'latency_p99': 0,
+            'error_rate': 0,
+            'gpu_utilization': 0
+        }
+        self.request_times = []
+        
+    def record_request(self, start_time, end_time, success=True):
+        duration = end_time - start_time
+        self.request_times.append(duration)
+        
+        # Keep only last 1000 requests for sliding window
+        if len(self.request_times) > 1000:
+            self.request_times.pop(0)
+        
+        # Update metrics
+        self._update_metrics()
+    
+    def _update_metrics(self):
+        if not self.request_times:
+            return
+        
+        sorted_times = sorted(self.request_times)
+        n = len(sorted_times)
+        
+        self.metrics.update({
+            'throughput': n / 60,  # requests per minute
+            'latency_p50': sorted_times[int(n * 0.5)],
+            'latency_p95': sorted_times[int(n * 0.95)],
+            'latency_p99': sorted_times[int(n * 0.99)]
+        })
+    
+    def get_metrics(self):
+        return self.metrics.copy()
+
+# Logging configuration
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('llm_service.log'),
+            logging.StreamHandler()
+        ]
+    )
+    
+    # JSON formatter for structured logging
+    class JSONFormatter(logging.Formatter):
+        def format(self, record):
+            log_entry = {
+                'timestamp': self.formatTime(record),
+                'level': record.levelname,
+                'logger': record.name,
+                'message': record.getMessage(),
+                'module': record.module,
+                'function': record.funcName,
+                'line': record.lineno
+            }
+            
+            if hasattr(record, 'request_id'):
+                log_entry['request_id'] = record.request_id
+            if hasattr(record, 'model'):
+                log_entry['model'] = record.model
+            
+            return json.dumps(log_entry)
+    
+    # Apply JSON formatter to file handler
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.FileHandler):
+            handler.setFormatter(JSONFormatter())
+
+# Alerting system
+class AlertManager:
+    def __init__(self, thresholds):
+        self.thresholds = thresholds
+        self.alert_state = {}
+    
+    def check_metrics(self, metrics):
+        alerts = []
+        
+        # Check latency
+        if metrics['latency_p95'] > self.thresholds['latency_p95']:
+            alerts.append({
+                'severity': 'warning',
+                'message': f"P95 latency exceeded threshold: {metrics['latency_p95']:.2f}s"
+            })
+        
+        # Check error rate
+        if metrics['error_rate'] > self.thresholds['error_rate']:
+            alerts.append({
+                'severity': 'critical',
+                'message': f"Error rate exceeded threshold: {metrics['error_rate']:.2%}"
+            })
+        
+        # Check GPU memory
+        if metrics['gpu_utilization'] > self.thresholds['gpu_memory']:
+            alerts.append({
+                'severity': 'warning',
+                'message': f"GPU memory usage high: {metrics['gpu_utilization']:.1%}"
+            })
+        
+        return alerts
+</code></pre>
+
+<div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
 <h4>📚 Next Chapters Preview</h4>
-<p><strong>Chapter 10</strong>: Inference Optimization (quantization, pruning, speculative decoding)<br>
-<strong>Chapter 11</strong>: Comprehensive Evaluation (benchmarks, safety, robustness)<br>
-<strong>Chapter 12</strong>: Production Deployment (serving, monitoring, scaling)</p>
+<p><strong>Chapter 13</strong>: Research Frontiers (new architectures, multimodal models, reasoning)<br>
+<strong>Chapter 14</strong>: Ethical Considerations (bias, fairness, transparency, governance)<br>
+<strong>Chapter 15</strong>: Future Directions (AGI paths, societal impact, regulation)</p>
 </div>
 </html>
