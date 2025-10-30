@@ -9,12 +9,173 @@
 This guide progresses from fundamental concepts to advanced research frontiers. Each chapter builds upon previous knowledge with practical implementations and mathematical rigor.
 </div>
 
-<h2>Table of Contents</h2>
-<ul>
-  <li><a href="#introduction">1. Introduction to the LLM Revolution</a></li>
-  <li><a href="#learning-path">2. Complete Learning Pathway</a></li>
-  <li><a href="#mathematical-foundations">3. Mathematical Foundations</a></li>
+<h1 align="center">📚 Complete LLM Guide - Table of Contents</h1>
+
+<div align="center">
+  <i>Your Comprehensive Roadmap to Mastering Large Language Models</i>
+</div>
+
+<br>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 2rem 0;">
+
+<!-- Column 1 -->
+<div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 1.5rem; border-radius: 10px; color: white;">
+<h3>🎯 Foundation & Fundamentals</h3>
+<ul style="list-style: none; padding: 0;">
+<li>• <a href="#introduction" style="color: white;">1. LLM Revolution</a></li>
+<li>• <a href="#learning-path" style="color: white;">2. Learning Pathway</a></li>
+<li>• <a href="#mathematical-foundations" style="color: white;">3. Math Foundations</a></li>
+<li>• <a href="#programming-fundamentals" style="color: white;">4. Programming</a></li>
+<li>• <a href="#neural-networks" style="color: white;">5. Neural Networks</a></li>
 </ul>
+</div>
+
+<!-- Column 2 -->
+<div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 1.5rem; border-radius: 10px; color: white;">
+<h3>⚡ Core Architecture</h3>
+<ul style="list-style: none; padding: 0;">
+<li>• <a href="#transformer-architecture" style="color: white;">6. Transformers</a></li>
+<li>• <a href="#attention-mechanisms" style="color: white;">7. Attention</a></li>
+<li>• <a href="#training-methodologies" style="color: white;">8. Training Methods</a></li>
+<li>• <a href="#fine-tuning-techniques" style="color: white;">9. Fine-tuning</a></li>
+<li>• <a href="#inference-optimization" style="color: white;">10. Inference</a></li>
+</ul>
+</div>
+
+<!-- Column 3 -->
+<div style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); padding: 1.5rem; border-radius: 10px; color: white;">
+<h3>🚀 Production & Beyond</h3>
+<ul style="list-style: none; padding: 0;">
+<li>• <a href="#evaluation-framework" style="color: white;">11. Evaluation</a></li>
+<li>• <a href="#production-deployment" style="color: white;">12. Deployment</a></li>
+<li>• <a href="#research-frontiers" style="color: white;">13. Research</a></li>
+<li>• <a href="#ethical-considerations" style="color: white;">14. Ethics</a></li>
+<li>• <a href="#future-directions" style="color: white;">15. Future</a></li>
+</ul>
+</div>
+
+</div>
+
+<br>
+
+<div style="background: #f8f9fa; padding: 1.5rem; border-radius: 10px; border-left: 4px solid #007acc;">
+<h3>📖 Detailed Chapter Breakdown</h3>
+
+<table style="width: 100%; border-collapse: collapse;">
+<tr style="background-color: #e3f2fd;">
+<th style="padding: 12px; text-align: left; border-bottom: 2px solid #007acc;">Chapter</th>
+<th style="padding: 12px; text-align: left; border-bottom: 2px solid #007acc;">Key Topics</th>
+<th style="padding: 12px; text-align: left; border-bottom: 2px solid #007acc;">Level</th>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>1. LLM Revolution</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">History, Evolution, Current Landscape</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Beginner</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>2. Learning Pathway</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Roadmap, Prerequisites, Timeline</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Beginner</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>3. Math Foundations</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Linear Algebra, Probability, Calculus</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Intermediate</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>4. Programming</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">PyTorch, Distributed Training, GPU</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Intermediate</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>5. Neural Networks</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Architectures, Backpropagation, Optimization</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Intermediate</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>6. Transformers</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Self-Attention, Positional Encoding, Implementation</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Advanced</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>7. Attention</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Multi-Head, Sparse, Efficient Mechanisms</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Advanced</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>8. Training Methods</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Pre-training, Scaling Laws, Distributed Training</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Advanced</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>9. Fine-tuning</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">LoRA, Adapters, RLHF, Prompt Tuning</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Advanced</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>10. Inference</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Quantization, Pruning, Speculative Decoding</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Expert</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>11. Evaluation</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Benchmarks, Safety, Bias Detection</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Expert</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>12. Deployment</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Serving, Scaling, Monitoring, Load Balancing</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Expert</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>13. Research</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">MoE, SSMs, Multimodal, Reasoning</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Research</td>
+</tr>
+
+<tr style="background-color: #f8f9fa;">
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>14. Ethics</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Bias, Fairness, Transparency, Privacy</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">All Levels</td>
+</tr>
+
+<tr>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;"><strong>15. Future</strong></td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Scaling, Governance, AI Safety, Impact</td>
+<td style="padding: 12px; border-bottom: 1px solid #ddd;">Visionary</td>
+</tr>
+
+</table>
+</div>
+
+<br>
+
+<div style="text-align: center; background: #e8f5e8; padding: 1rem; border-radius: 10px; border: 2px dashed #4caf50;">
+<h3>🚀 Ready to Begin Your Journey?</h3>
+<p>Start with Chapter 1 and progress systematically through each section. Each chapter builds upon previous knowledge!</p>
+<strong>Total Learning Time: ~6-12 months | Prerequisites: Python, Basic Math</strong>
+</div>
+
+<br>
+
+<div align="center">
+  <b>M Wasif</b>
+</div>
+</html>
 
 <h2 id="introduction">1. Introduction to the LLM Revolution</h2>
 
