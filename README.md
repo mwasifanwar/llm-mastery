@@ -3961,9 +3961,9 @@ class MultiAgentSafety:
   </a>
 </p>
 
-<footer style="border-top: 1px solid #eaeaea; margin-top: 2em; padding-top: 1em; text-align: center;">
-  <p><em>Building the future of AI, one layer at a time.</em></p>
-</footer>
+<p align="center">
+  <em>⭐ *Building the future of AI, one layer at a time.*</em>  
+</p>
 
 <br>
 
