@@ -77,6 +77,10 @@ This guide progresses from fundamental concepts to advanced research frontiers. 
   </tr>
 </table>
 
+<div align="center">
+  <b>M Wasif</b>
+</div>
+
 <h3>1.3 Scale Progression Analysis</h3>
 
 <pre><code># Parameter count evolution (2018-2024)
@@ -309,6 +313,10 @@ Month 11-12: Advanced Topics & Research Projects
 <p><strong>Low-Rank Approximation:</strong></p>
 <p>$A_k = U_k \Sigma_k V_k^T$ approximates $A$ with rank $k$</p>
 
+<div align="center">
+  <b>M Wasif</b>
+</div>
+
 <h3>3.8 References & Further Reading</h3>
 
 <ul>
@@ -462,6 +470,10 @@ print(torch.cuda.max_memory_allocated())  # Peak memory usage
 # Synchronization
 torch.cuda.synchronize()  # Wait for GPU operations to complete
 </code></pre>
+
+<div align="center">
+  <b>M Wasif</b>
+</div>
 
 <h2 id="neural-networks">5. Neural Networks Deep Dive</h2>
 
@@ -688,6 +700,10 @@ Input → Token Embedding → Positional Encoding → Encoder Stack → Decoder 
   <li>$\gamma, \beta$: Learnable parameters</li>
 </ul>
 
+<div align="center">
+  <b>M Wasif</b>
+</div>
+
 <h3>6.6 Complete Transformer Implementation</h3>
 
 <pre><code>import torch
@@ -891,6 +907,10 @@ def combined_mask(tgt, pad_token_id=0):
     <td>Approximation, efficiency</td>
   </tr>
 </table>
+
+<div align="center">
+  <b>M Wasif</b>
+</div>
 
 <h3>7.3 Multi-Head Attention Mathematics</h3>
 
@@ -1209,6 +1229,10 @@ def apply_lora_to_linear_layers(model, rank=8):
             apply_lora_to_linear_layers(module, rank)
 </code></pre>
 
+<div align="center">
+  <b>M Wasif</b>
+</div>
+
 <h4>9.2.2 Adapter Layers</h4>
 
 <pre><code>class Adapter(nn.Module):
@@ -1422,6 +1446,10 @@ def ppo_training_step(policy_model, reward_model, prompts):
 
 <div style="background: #e8f4f8; padding: 15px; border-radius: 5px; margin-top: 20px;">
 <h2 id="inference-optimization">10. Inference Optimization</h2>
+
+<div align="center">
+  <b>M Wasif</b>
+</div>
 
 <h3>10.1 Quantization Techniques</h3>
 
@@ -1846,6 +1874,10 @@ class EfficientTransformerInference:
         
         return next_tokens
 </code></pre>
+
+<div align="center">
+  <b>M Wasif</b>
+</div>
 
 <h2 id="evaluation-framework">11. Comprehensive Evaluation</h2>
 
